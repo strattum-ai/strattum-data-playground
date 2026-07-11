@@ -32,7 +32,22 @@ Só o `airtable` define resources dlt (e **nem usa `pipeline.run()`** —
 - 🛑 **Padronizar `write_disposition` + `primary_key`** por resource (upsert nativo).
 - 🛑 **Ligar `incremental("updated_at")`** onde a fonte tem cursor (conecta com o
   levantamento por conector — [pontos-a-verificar §2](../../pontos-a-verificar.md)).
-- 🛑 O **destino** (DuckLake/Delta/`.duckdb`) sai da [tarefa 01](../01-lakehouse/) — o dlt
-  escreve nos três; aqui o foco é **como extrai/carrega**, não onde aterrissa.
+- 🛑 **Destino = DuckLake** (decisão da [tarefa 01](../01-lakehouse/)): o dlt escreve nativo no
+  DuckLake (catálogo Postgres + parquet no object storage).
+
+### Modo de escrita e colunas — **vêm do config do conector**
+
+O comportamento por resource é **dirigido pelo config**, não hardcoded:
+
+- 🛑 **O usuário/config declara as colunas de incrementalidade:** um **cursor** (timestamp/data,
+  ex. `updated_at`) e uma **chave** (`primary_key`/id estável).
+- 🛑 **Modo derivado do config:**
+  - tem cursor + chave → **incremental** (`dlt.sources.incremental(<cursor>)` +
+    `write_disposition="merge"` por `primary_key`) — só o delta, upsert nativo.
+  - não tem → **overwrite** (`write_disposition="replace"`, full refresh).
+- 🛑 Validar no config do conector que, se o modo for incremental, as duas colunas existem
+  (senão, recusar/avisar em vez de silenciosamente virar full load).
 
 > SaaS API (Jira, HubSpot…) segue via dlt/REST; `connectorx` é pro caminho de **banco**.
+> As mesmas colunas (cursor + chave) alimentam o incremental do RAW→CLEAN e a idempotência no
+> grafo — ver [tarefa 01 §A/§C](../01-lakehouse/).
