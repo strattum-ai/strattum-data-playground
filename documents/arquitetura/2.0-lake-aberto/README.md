@@ -8,7 +8,7 @@
 > Como roda **hoje** (e onde quebra): [1.0-atual](../1.0-atual.md). O que já **validamos**:
 > [descobertas](descobertas.md). O que falta **decidir/validar**:
 > [pontos-a-verificar](pontos-a-verificar.md). O **backlog**: [tarefas](tarefas/). Como
-> **migrar**: [migracao](migracao.md). Índice geral: [../README](../README.md).
+> **migrar**: [migracao](tarefas/01-lakehouse/migracao.md). Índice geral: [../README](../README.md).
 
 Legenda: ✅ decidido/validado · 🟡 decidido, variante em aberto · 🛑 não validado
 
@@ -33,21 +33,25 @@ refresh) · 🛑 **CLEAN sem `updated_at` → full load** no grafo (round-trip p
 
 ```mermaid
 flowchart LR
-    subgraph ING["INGESTÃO — empresa SEM lake ✅ validado"]
-        FF["FONTE<br/>SaaS · db do cliente"] -->|dlt| RR["RAW<br/>DuckLake/Delta<br/>em ObjStorage"]
-        RR -->|dbt| CC["CLEAN<br/>DuckLake/Delta<br/>em ObjStorage"]
+    subgraph ING["INGESTÃO — empresa SEM lake"]
+        FF["FONTE<br/>SaaS · db do cliente"] -->|dlt+connectorx| RR["RAW<br/>DuckLake"]
+        RR -->|LLM| ER["ENRICHMENT<br/>DuckLake"]
+        ER -->|dbt| CC["CLEAN<br/>DuckLake"]
     end
-    subgraph FED["FEDERATION — empresa COM lake, no-ETL 🛑 não validado ponta-a-ponta"]
-        LC["LAKE DO CLIENTE<br/>Snowflake / Databricks"] -->|scans| EN["Trino ou DuckDB<br/>lê direto do lake"]
+    subgraph FED["FEDERATION — empresa COM lake, no-ETL 🛑 a validar"]
+        LC["LAKE DO CLIENTE<br/>Snowflake / Databricks"] -->|"DuckDB + ADBC"| EN["lê direto (Arrow)"]
     end
+    CAT["catálogo Postgres"] -.-> RR
+    CAT -.-> ER
+    CAT -.-> CC
     ONT["Ontologia"] --> MW
     CC -->|No ETL| MW["Memory Worker<br/>DuckDB + Cypher"]
     EN -->|No ETL| MW
     MW --> FK["FalkorDB"]
 ```
 
-> Fonte: quadro de arquitetura do time. SVG de referência:
-> [diagramas/2.0-visao-geral.svg](../diagramas/2.0-visao-geral.svg).
+> Storage = **DuckLake** (catálogo Postgres, dados em object storage). Federation =
+> **DuckDB + ADBC**. Diagrama polido: [diagramas/2.0-visao-geral.svg](../diagramas/2.0-visao-geral.svg).
 
 ---
 
@@ -55,20 +59,21 @@ flowchart LR
 
 | # | Decisão | Status | Base |
 |---|---|---|---|
-| 1 | **Ingestão com `dlt`** (backend `connectorx`) — resolve o OOM do conector caseiro | ✅ | [descobertas §1](descobertas.md) |
+| 1 | **Ingestão com `dlt` + `connectorx`** — resolve o OOM do conector caseiro | ✅ | [descobertas §1](descobertas.md) |
 | 2 | **Transform com `dbt`** (DuckDB como engine, lendo o lake via scan) | ✅ | [1.0-atual](../1.0-atual.md) |
-| 3 | **Lake aberto** — RAW **e** CLEAN saem do `.duckdb` monolítico | ✅ | [descobertas §3](descobertas.md) |
+| 3 | **Lake = DuckLake** (catálogo Postgres) — RAW/enrichment/CLEAN saem do `.duckdb` | ✅ | [descobertas §3](descobertas.md) |
 | 4 | **Object storage** (MinIO / S3) como storage do lake | ✅ | [descobertas §2](descobertas.md) |
-| 5 | **Federation** — para empresa com lake, ler direto sem ETL | ✅ (conceito) | [descobertas §5](descobertas.md) |
+| 5 | **Federation = DuckDB + ADBC** — lê Snowflake/Databricks (Arrow) sem ETL | ✅ | [descobertas §5](descobertas.md) |
+| 6 | **Camada `enrichment` (LLM)** entre RAW e CLEAN | ✅ | [descobertas §6](descobertas.md) |
 
 ## O que ainda está em aberto
 
-| # | Decisão pendente | Onde |
+| # | Aberto (validar/medir — não é mais escolha) | Onde |
 |---|---|---|
-| A | **DuckLake vs Delta** — qual formato do lake | [pontos §1](pontos-a-verificar.md) |
-| B | **Trino vs DuckDB** — qual engine lê o lake do cliente na federation | [pontos §2](pontos-a-verificar.md) |
-| C | **Como o `catalog-api` lê os dois formatos** | [pontos §6](pontos-a-verificar.md) · [migracao](migracao.md) |
-| D | **Como o `memory-worker` muda** (o `CleanReader`) | [pontos §7](pontos-a-verificar.md) · [migracao](migracao.md) |
+| A | **Maturidade do DuckLake (1.0)** + catálogo Postgres sob concorrência | [tarefa 01](tarefas/01-lakehouse/) |
+| B | **Maturidade da extensão ADBC** (comunidade) p/ Snowflake/Databricks | [tarefa 03](tarefas/03-federation/) · [pontos §4](pontos-a-verificar.md) |
+| C | **`run_sql` só lê parquet — nem olha a CLEAN** (atachar o catálogo DuckLake) | [tarefa 01](tarefas/01-lakehouse/) · [migracao](tarefas/01-lakehouse/migracao.md) |
+| D | **Migração via classe `LakeStore`** (worker, catalog-api, run_sql leem o lake) | [tarefa 01 §E](tarefas/01-lakehouse/) · [migracao](tarefas/01-lakehouse/migracao.md) |
 | E | Performance do grafo · data quality · deep-dive por conector · **grafo em container separado** | [pontos-a-verificar](pontos-a-verificar.md) |
 
 ---

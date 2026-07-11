@@ -23,7 +23,7 @@ pergunta aberta ──investiga──► descoberta ──► tarefa ──► v
 | **[descobertas.md](2.0-lake-aberto/descobertas.md)** | O que já foi **testado/concluído** (findings dos experimentos + decisões) |
 | **[pontos-a-verificar.md](2.0-lake-aberto/pontos-a-verificar.md)** | O que ainda está **aberto** (perf do grafo, deep-dive por conector, grafo em container separado) |
 | **[tarefas/](2.0-lake-aberto/tarefas/)** | **Backlog em pastas**, uma por iniciativa (lakehouse · conectores · federation · data quality) |
-| **[migracao.md](2.0-lake-aberto/migracao.md)** | Plano de migração da CLEAN pro lake — **agnóstico Delta/DuckLake** — código (pipeline, catalog-api, memory-worker) + runbook |
+| **[migracao.md](2.0-lake-aberto/tarefas/01-lakehouse/migracao.md)** | Plano de migração da CLEAN pro lake — **agnóstico Delta/DuckLake** — código (pipeline, catalog-api, memory-worker) + runbook |
 
 ### Diagramas
 
