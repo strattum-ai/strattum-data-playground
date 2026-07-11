@@ -1,0 +1,290 @@
+<title>DuckLake — escrita concorrente e catálogo</title>
+<meta name="description" content="Experimento: dois conectores escrevendo no mesmo DuckLake ao mesmo tempo — catálogo .duckdb vs Postgres, dados no MinIO.">
+<style>
+  :root{
+    --navy:#0F1035; --slate:#1E293B; --paper:#F8FAFC; --white:#fff;
+    --gray:#94A3B8; --grayd:#475569; --line:#E2E8F0;
+    --indigo:#3730A3; --indigoL:#EEF2FF; --sky:#0EA5E9;
+    --green:#059669; --greenL:#ECFDF5; --rose:#E11D48; --roseL:#FFF1F3;
+    --amber:#D97706; --amberL:#FFFBEB;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","IBM Plex Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--slate);font-family:var(--sans);
+    line-height:1.65;-webkit-font-smoothing:antialiased;font-size:17px}
+  .wrap{max-width:840px;margin:0 auto;padding:0 24px}
+  section{padding:56px 0;border-top:1px solid var(--line)}
+  section:first-of-type{border-top:0}
+  h1,h2,h3{text-wrap:balance;line-height:1.2;margin:0}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--indigo);font-weight:600}
+  p{margin:14px 0}
+  a{color:var(--indigo);text-decoration:none;border-bottom:1px solid rgba(55,48,163,.3)}
+  a:hover{border-bottom-color:var(--indigo)}
+  code{font-family:var(--mono);font-size:.86em;background:#EEF1F6;padding:.12em .38em;border-radius:4px;color:#334155}
+  .mono{font-family:var(--mono)}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* masthead */
+  .masthead{background:var(--navy);color:var(--paper);padding:64px 0 56px}
+  .masthead .eyebrow{color:#A5B4FC}
+  .masthead h1{font-size:44px;font-weight:800;letter-spacing:-.02em;color:#fff;margin:16px 0 0}
+  .masthead .lede{font-size:19px;color:#C7D2E5;max-width:60ch;margin:18px 0 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:28px;font-family:var(--mono);
+    font-size:12.5px;color:#8B96B5}
+  .meta b{color:#C7D2E5;font-weight:600}
+
+  /* verdict cards */
+  .verdict{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:8px}
+  .card{background:var(--white);border:1px solid var(--line);border-radius:12px;padding:24px;
+    box-shadow:0 1px 2px rgba(15,16,53,.04)}
+  .card.fail{border-top:3px solid var(--rose)}
+  .card.pass{border-top:3px solid var(--green)}
+  .card h3{font-size:15px;color:var(--grayd);font-weight:600}
+  .card .sub{font-family:var(--mono);font-size:12px;color:var(--gray);margin-top:2px}
+  .score{display:flex;align-items:baseline;gap:10px;margin:14px 0 4px}
+  .score .big{font-size:52px;font-weight:800;letter-spacing:-.03em;line-height:1}
+  .fail .big{color:var(--rose)} .pass .big{color:var(--green)}
+  .score .of{font-family:var(--mono);color:var(--gray);font-size:15px}
+  .tag{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:600;
+    padding:3px 9px;border-radius:999px;letter-spacing:.03em}
+  .tag.fail{background:var(--roseL);color:var(--rose)} .tag.pass{background:var(--greenL);color:var(--green)}
+  .card p{font-size:14.5px;color:var(--grayd);margin:12px 0 0}
+
+  /* flow diagram */
+  .flow{display:flex;align-items:stretch;gap:0;overflow-x:auto;padding:8px 0 4px;margin-top:8px}
+  .flow .col{display:flex;flex-direction:column;gap:8px;justify-content:center;min-width:0}
+  .node{background:var(--white);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+    min-width:132px;text-align:center}
+  .node .t{font-weight:700;font-size:14px}
+  .node .d{font-family:var(--mono);font-size:11px;color:var(--gray);margin-top:3px}
+  .node.src{border-left:3px solid var(--sky)}
+  .node.engine{border:1px solid var(--indigo);background:var(--indigoL)}
+  .node.cat{border-left:3px solid var(--indigo)}
+  .node.data{border-left:3px solid var(--green)}
+  .arrow{display:flex;align-items:center;color:var(--gray);font-size:22px;padding:0 14px;flex:0 0 auto}
+
+  table{border-collapse:collapse;width:100%;font-size:14.5px}
+  .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin-top:20px}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#F1F5F9;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--grayd)}
+  tr:last-child td{border-bottom:0}
+  td .mono{font-size:13px;color:var(--indigo)}
+  .ok{color:var(--green);font-weight:700} .no{color:var(--rose);font-weight:700}
+
+  .callout{border-radius:12px;padding:20px 22px;margin-top:22px;border:1px solid}
+  .callout.warn{background:var(--amberL);border-color:#FCD9A6}
+  .callout.warn .k{color:var(--amber)}
+  .callout .k{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+  .callout p{margin:8px 0 0;font-size:15px;color:var(--grayd)}
+
+  pre{background:var(--navy);color:#D7DCEC;font-family:var(--mono);font-size:12.5px;line-height:1.6;
+    padding:16px 18px;border-radius:10px;overflow-x:auto;margin-top:18px}
+  pre .c{color:#7E88AD} pre .g{color:#6EE7B7} pre .r{color:#FDA4AF}
+
+  h2{font-size:26px;font-weight:800;letter-spacing:-.015em;color:var(--navy);margin-top:6px}
+  .lead-in{color:var(--grayd);margin-top:10px}
+  ul{margin:14px 0;padding-left:20px} li{margin:7px 0}
+
+  .steps{display:grid;gap:12px;margin-top:20px}
+  .step{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start;
+    background:var(--white);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .step .n{font-family:var(--mono);font-weight:700;color:var(--indigo);font-size:13px;
+    background:var(--indigoL);border-radius:7px;padding:6px 10px;min-width:44px;text-align:center}
+  .step .st{font-weight:700;font-size:15px}
+  .step .sd{font-size:14px;color:var(--grayd);margin-top:2px}
+
+  footer{background:var(--navy);color:#8B96B5;font-family:var(--mono);font-size:12.5px;padding:30px 0}
+  footer a{color:#A5B4FC;border:0}
+  @media(max-width:620px){
+    .masthead h1{font-size:33px} .verdict{grid-template-columns:1fr}
+    section{padding:42px 0}
+  }
+</style>
+
+<header class="masthead">
+  <div class="wrap">
+    <div class="eyebrow">Experimentação · Arquitetura 2.0 / Lake aberto · #09</div>
+    <h1>DuckLake: escrita concorrente e catálogo</h1>
+    <p class="lede">Dois conectores — um lendo MySQL, outro Postgres — escrevendo no
+      <b>mesmo lake ao mesmo tempo</b>. O que decide se dá certo não são os dados: é
+      <b>onde vivem os metadados</b>.</p>
+    <div class="meta">
+      <span><b>Stack</b> DuckDB 1.4.5 · DuckLake · MinIO (S3) · MySQL 8 · Postgres 16</span>
+      <span><b>Método</b> 2 processos separados, escrita simultânea</span>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="eyebrow">O veredito</div>
+    <h2 style="margin-top:12px">O catálogo de metadados decide a concorrência</h2>
+    <p class="lead-in">O storage dos dados foi o mesmo nos dois casos (parquet no MinIO).
+      Mudou só o backend do catálogo. O resultado não foi sutil:</p>
+    <div class="verdict">
+      <div class="card fail">
+        <h3>Catálogo em arquivo</h3>
+        <div class="sub">catalog.ducklake (DuckDB)</div>
+        <div class="score"><span class="big num">1/2</span><span class="of">conectores</span></div>
+        <span class="tag fail">single-writer</span>
+        <p>O arquivo abre com <b>lock exclusivo</b>. O 2º conector falha já no <code>ATTACH</code>.
+          É o limite do experimento&nbsp;04 reaparecendo — com N conectores, não serve.</p>
+      </div>
+      <div class="card pass">
+        <h3>Catálogo em Postgres</h3>
+        <div class="sub">ducklake:postgres:…</div>
+        <div class="score"><span class="big num">2/2</span><span class="of">conectores</span></div>
+        <span class="tag pass">escrita concorrente</span>
+        <p>Cada conector commita numa transação própria no Postgres (snapshot isolation do
+          DuckLake). Os dois criaram suas tabelas raw <b>ao mesmo tempo</b>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="eyebrow">O experimento</div>
+    <h2 style="margin-top:12px">Dois conectores, um lake</h2>
+    <p class="lead-in">Cada conector é um processo independente: lê a sua fonte e materializa
+      uma tabela na camada <b>raw</b> do DuckLake. Os dados sempre vão pro MinIO; o catálogo
+      é o que variamos.</p>
+    <div class="flow">
+      <div class="col" style="gap:14px">
+        <div class="node src"><div class="t">MySQL</div><div class="d">srcdb.customers</div></div>
+        <div class="node src"><div class="t">Postgres</div><div class="d">src.orders</div></div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="col">
+        <div class="node engine"><div class="t">DuckDB</div><div class="d">engine · 2 processos</div></div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="col" style="gap:14px">
+        <div class="node cat"><div class="t">Catálogo</div><div class="d">metadados · Postgres</div></div>
+        <div class="node data"><div class="t">Dados</div><div class="d">parquet · MinIO s3://</div></div>
+      </div>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Cenário</th><th>Catálogo</th><th>Dados</th><th>Resultado</th></tr></thead>
+        <tbody>
+          <tr><td><b>A</b></td><td><span class="mono">catalog.ducklake</span> (arquivo)</td>
+            <td>MinIO <span class="mono">s3://</span></td><td><span class="no">1/2</span> — 2º falha no <code>ATTACH</code> (lock)</td></tr>
+          <tr><td><b>B</b></td><td><span class="mono">postgres</span></td>
+            <td>MinIO <span class="mono">s3://</span></td><td><span class="ok">2/2</span> — os dois commitam</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:20px">No cenário B, o próprio catálogo registra os dois commits
+      concorrentes em snapshots separados:</p>
+    <pre><span class="c"># ducklake_snapshot_changes (no Postgres)</span>
+snapshot 2  created_table "main"."raw_customers_mysql"  <span class="g">← conectorA (MySQL)</span>
+snapshot 3  created_table "main"."raw_orders_pg"        <span class="g">← conectorB (Postgres)</span></pre>
+    <div class="callout warn">
+      <div class="k">Nuance a cravar — inicialização é corrida</div>
+      <p>Rodar os 2 conectores contra um catálogo Postgres <b>vazio</b> também falha (1/2):
+        ambos tentam criar as tabelas <span class="mono">ducklake_*</span> ao mesmo tempo.
+        A escrita concorrente só passa depois de <b>inicializar o lake uma vez</b> (bootstrap).
+        No fluxo real, o lake é provisionado no setup do cliente — não a cada carga.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Anatomia</div>
+    <h2 style="margin-top:12px">Um lake, dois pedaços separados</h2>
+    <p class="lead-in">DuckLake separa o <b>cérebro</b> (catálogo) do <b>corpo</b> (dados).
+      A engine (DuckDB) é stateless — descartável. É isso que permite trocar o backend do
+      catálogo sem tocar nos dados.</p>
+    <div class="steps">
+      <div class="step"><div class="n">meta</div><div>
+        <div class="st">Catálogo → Postgres · 22 tabelas <span class="mono">ducklake_*</span></div>
+        <div class="sd">quais tabelas existem, o schema de cada uma, snapshots (versões), e o mapa
+          tabela → parquet. É o transaction-log + metastore, num banco transacional.</div></div></div>
+      <div class="step"><div class="n">data</div><div>
+        <div class="st">Dados → MinIO · parquet imutável</div>
+        <div class="sd"><span class="mono">s3://lake/…/main/&lt;tabela&gt;/ducklake-*.parquet</span> — nova
+          versão = novo arquivo. Poderia ser S3/GCS do cliente.</div></div></div>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Tabela do catálogo</th><th>Guarda</th></tr></thead>
+        <tbody>
+          <tr><td><span class="mono">ducklake_snapshot</span></td><td>cada commit = 1 versão do lake (base do time-travel)</td></tr>
+          <tr><td><span class="mono">ducklake_snapshot_changes</span></td><td>o que mudou em cada commit (create_table, insert…)</td></tr>
+          <tr><td><span class="mono">ducklake_table</span> · <span class="mono">ducklake_schema</span></td><td>tabelas e schemas registrados</td></tr>
+          <tr><td><span class="mono">ducklake_column</span></td><td>o schema de cada tabela (coluna, tipo, default, nullable)</td></tr>
+          <tr><td><span class="mono">ducklake_data_file</span></td><td>mapa tabela → parquet no MinIO (+ record_count, tamanho)</td></tr>
+          <tr><td><span class="mono">ducklake_file_column_stats</span></td><td>min/max/null por coluna por arquivo — pruning na leitura</td></tr>
+          <tr><td><span class="mono">ducklake_delete_file</span></td><td>deletes posicionais (merge-on-read)</td></tr>
+          <tr><td><span class="mono">ducklake_partition_*</span></td><td>particionamento (definição, colunas, valor por arquivo)</td></tr>
+          <tr><td class="mono" style="color:var(--gray)">+ 14 outras</td><td>column_mapping, name_mapping, tags, stats agregadas, files_scheduled_for_deletion (GC)…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn" style="background:var(--indigoL);border-color:#C7D2FE">
+      <div class="k" style="color:var(--indigo)">Respondendo àquela frase confusa</div>
+      <p>“uma 2ª conexão leu a <span class="mono">orders</span> sem tocar em arquivo — só o
+        Postgres” foi <b>impreciso</b>. O correto: a 2ª conexão descobriu <b>quais tabelas
+        existem e onde estão os parquets</b> consultando só o <b>catálogo</b> (Postgres) — sem
+        abrir o arquivo <span class="mono">.duckdb</span>. Pra ler as <b>linhas</b>, aí sim ela
+        baixa os <b>parquets do MinIO</b>. Metadados vêm do catálogo; dados, do storage.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Onde isso se encaixa</div>
+    <h2 style="margin-top:12px">Mapa da decisão — engine, catálogo, federação</h2>
+    <p class="lead-in">Esta série de experimentos converge numa stack 2.0: <b>DuckDB</b> como
+      engine, <b>DuckLake com catálogo Postgres</b> como lake concorrente, e a federação
+      resolvida sem depender de Trino.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Via de federação</th><th>Lê/escreve DuckLake?</th><th>Precisa Trino?</th><th>Plugin/Python?</th></tr></thead>
+        <tbody>
+          <tr><td>Plugin Trino no dbt-duckdb <span class="mono">(#07)</span></td><td class="ok">sim</td><td>sim (cluster)</td><td>plugin custom</td></tr>
+          <tr><td>dbt-trino (engine = Trino)</td><td class="no">não</td><td>é a engine</td><td>não</td></tr>
+          <tr><td>Extensão ADBC no DuckDB <span class="mono">(#08)</span></td><td class="ok">sim</td><td class="ok">não</td><td class="ok">não</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="steps" style="margin-top:22px">
+      <div class="step"><div class="n">#06</div><div><div class="st">Federação → grafo (DuckDB vs Trino)</div>
+        <div class="sd">ler a CLEAN do cliente direto no grafo, sem ETL.</div></div></div>
+      <div class="step"><div class="n">#07</div><div><div class="st">Federação na escrita, via dbt</div>
+        <div class="sd">RAW (DuckLake) × fonte Trino → CLEAN nova na DuckLake.</div></div></div>
+      <div class="step"><div class="n">#08</div><div><div class="st">Federação via ADBC (sem Trino)</div>
+        <div class="sd">DuckDB lê Databricks/Snowflake direto, em Arrow, sem plugin.</div></div></div>
+      <div class="step"><div class="n">#09</div><div><div class="st">Escrita concorrente no DuckLake</div>
+        <div class="sd">catálogo Postgres destrava N conectores escrevendo juntos. <b>Você está aqui.</b></div></div></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Antes de produção</div>
+    <h2 style="margin-top:12px">Caveats a cravar</h2>
+    <ul>
+      <li><b>Mesma tabela, 2 writers → concorrência otimística:</b> pode haver conflito de
+        commit e exigir <b>retry</b>. Tabelas distintas (1 conector = 1 tabela) não conflitam.</li>
+      <li><b>O Postgres do catálogo vira dependência crítica</b> — é o cérebro do lake. Backup/HA.</li>
+      <li><b>Storage compartilhado obrigatório</b> pra writers distribuídos: <span class="mono">DATA_PATH</span>
+        no MinIO/S3 (testado), não disco local.</li>
+      <li><b>Não medimos</b> throughput sob muitos writers nem GC/<span class="mono">vacuum</span> de
+        parquets órfãos — em aberto.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    experimentacoes/09-ducklake-concorrencia · scripts: <span style="color:#C7D2E5">concurrency_test.py</span>,
+    <span style="color:#C7D2E5">inspect_catalog.py</span> · alimenta a arquitetura 2.0 / lake aberto
+  </div>
+</footer>

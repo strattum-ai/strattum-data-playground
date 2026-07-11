@@ -1,0 +1,22 @@
+version: 2
+
+sources:
+  # (1) Nossa RAW/CLEAN em DuckLake (banco anexado `lake`) — leitura nativa, sem cópia.
+  - name: raw_lake
+    database: lake
+    schema: main
+    tables:
+      - name: orders
+
+  # (2) Fonte FEDERADA via Trino, servida pelo plugin `trino` (ver profiles.yml).
+  #     Adicionar outra tabela federada = só mais um item aqui. Zero Python.
+  - name: federated
+    meta:
+      plugin: trino
+    tables:
+      - name: products
+        meta:
+          relation: postgresql.fed.products   # em prod: delta.<schema>.<tabela> / snowflake...
+          # alternativas ao 'relation':
+          #   catalog: postgresql              # usa catalog + schema/nome desta source
+          #   query: "SELECT ... FROM ... WHERE ..."   # SQL Trino completo (pushdown)
