@@ -1,0 +1,14 @@
+# artefatos gerados pelos experimentos — nunca versionar
+.data/
+.venv/
+.out/
+__pycache__/
+*.pyc
+# saída do dbt
+**/target/
+**/logs/
+.user.yml
+# dados de lake gerados
+*.duckdb
+*.ducklake
+*.parquet

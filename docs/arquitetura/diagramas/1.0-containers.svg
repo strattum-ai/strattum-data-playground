@@ -1,0 +1,21 @@
+<svg width="100%" viewBox="0 0 800 320" role="img" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, -apple-system, sans-serif">
+<title>Strattum — mapa de containers (hoje)</title>
+<desc>Containers do docker-compose: worker-data (dlt+dbt, DuckDB), volume strattum_data_local (RAW+CLEAN), worker-ai (memory_worker, DuckDB in-process), falkordb (grafo), memory-api (graph_mapping).</desc>
+<text x="24" y="40" font-size="15" font-weight="500" fill="#33332e">containers (hoje) — DuckDB é o engine de compute</text>
+<text x="24" y="62" font-size="11" fill="#8a8a80">quem roda o quê no starter (docker-compose)</text>
+
+<rect x="24" y="84" width="290" height="34" rx="6" fill="#eef0f2" stroke="#d3d7dc"/><text x="38" y="106" font-size="12.5" font-family="ui-monospace, Menlo, monospace" font-weight="500" fill="#3f4247">strattum-prefect-worker-data</text>
+<text x="330" y="106" font-size="12" fill="#55555a">dlt (connectorx / delta-rs) + dbt (DuckDB) → RAW + CLEAN</text>
+
+<rect x="24" y="128" width="290" height="34" rx="6" fill="#e6eefb" stroke="#b9cdf0"/><text x="38" y="150" font-size="12.5" font-family="ui-monospace, Menlo, monospace" font-weight="500" fill="#2f5296">strattum_data_local</text>
+<text x="330" y="150" font-size="12" fill="#55555a">volume — RAW + CLEAN em /data · strattum.duckdb</text>
+
+<rect x="24" y="172" width="290" height="34" rx="6" fill="#eef0f2" stroke="#d3d7dc"/><text x="38" y="194" font-size="12.5" font-family="ui-monospace, Menlo, monospace" font-weight="500" fill="#3f4247">strattum-prefect-worker-ai</text>
+<text x="330" y="194" font-size="12" fill="#55555a">memory_worker · DuckDB in-process (+ federação)</text>
+
+<rect x="24" y="216" width="290" height="34" rx="6" fill="#fbe4f0" stroke="#f0b9da"/><text x="38" y="238" font-size="12.5" font-family="ui-monospace, Menlo, monospace" font-weight="500" fill="#a03572">strattum-falkordb</text>
+<text x="330" y="238" font-size="12" fill="#55555a">grafo</text>
+
+<rect x="24" y="260" width="290" height="34" rx="6" fill="#f7edd3" stroke="#e3cf9e"/><text x="38" y="282" font-size="12.5" font-family="ui-monospace, Menlo, monospace" font-weight="500" fill="#8a6d2f">strattum-memory-api</text>
+<text x="330" y="282" font-size="12" fill="#55555a">serve o graph_mapping.yaml</text>
+</svg>

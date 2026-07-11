@@ -1,0 +1,10 @@
+ducklake_demo:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: ":memory:"
+      extensions: [ducklake]
+      attach:
+        - path: "ducklake:{{ env_var('DUCKLAKE_CATALOG') }}"
+          alias: lake

@@ -1,0 +1,11 @@
+name: "federation_dbt"
+version: "1.0"
+profile: "federation_dbt"
+
+model-paths: ["models"]
+
+# Engine = DuckDB (dbt-duckdb). A RAW vem da DuckLake (attach nativo); a fonte
+# federada vem do Trino (via modelo Python). O join materializa de volta na DuckLake.
+models:
+  federation_dbt:
+    +materialized: table

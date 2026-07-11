@@ -1,0 +1,28 @@
+# Profile do experimento. Paths vêm de env vars (o notebook/​setup.py exporta).
+# A engine é um .duckdb em disco; a DuckLake do cliente é anexada como `lake`.
+federation_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('FED_ENGINE_DB') }}"
+      schema: main
+      threads: 1
+      # ducklake precisa estar carregada ANTES do attach (dbt-duckdb respeita a ordem)
+      extensions:
+        - ducklake
+      # plugin que serve TODAS as fontes federadas do Trino (ver models/sources.yml).
+      # `module` é importável via PYTHONPATH=<dir do projeto> (o notebook exporta isso).
+      plugins:
+        - module: plugins.trino_source
+          alias: trino
+          config:
+            host: "{{ env_var('TRINO_HOST', 'localhost') }}"
+            port: "{{ env_var('TRINO_PORT', '8085') }}"
+            user: dbt
+      attach:
+        # a CLEAN/RAW do cliente em DuckLake — attach nativo, sem copiar dado
+        - path: "ducklake:{{ env_var('DUCKLAKE_CAT') }}"
+          alias: lake
+          options:
+            data_path: "{{ env_var('DUCKLAKE_DATA') }}"

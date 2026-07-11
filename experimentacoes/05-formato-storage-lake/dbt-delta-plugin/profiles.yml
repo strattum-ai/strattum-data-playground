@@ -1,0 +1,10 @@
+dbt_escreve_delta:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('EXP_DUCKDB') }}"
+      extensions:
+        - delta
+      plugins:
+        - module: delta_writer

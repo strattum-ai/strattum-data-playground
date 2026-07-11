@@ -1,0 +1,9 @@
+name: dbt_escreve_delta
+version: "1.0"
+config-version: 2
+profile: dbt_escreve_delta
+model-paths: ["models"]
+
+models:
+  dbt_escreve_delta:
+    +materialized: external

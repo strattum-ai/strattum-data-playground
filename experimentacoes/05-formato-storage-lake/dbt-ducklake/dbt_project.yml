@@ -1,0 +1,5 @@
+name: ducklake_demo
+profile: ducklake_demo
+version: "1.0"
+config-version: 2
+model-paths: ["models"]

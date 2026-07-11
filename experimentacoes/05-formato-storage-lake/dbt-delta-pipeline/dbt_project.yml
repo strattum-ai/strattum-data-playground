@@ -1,0 +1,9 @@
+name: delta_clean
+version: "1.0"
+config-version: 2
+profile: delta_clean
+model-paths: ["models"]
+
+models:
+  delta_clean:
+    +materialized: table
