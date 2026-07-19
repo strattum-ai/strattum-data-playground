@@ -41,7 +41,7 @@ e o Delta foi até o FalkorDB (100→120 nós ✅). Comparados os dois:
 dbt/dlt escrevem nativo (sem ponte nem write duplo), catálogo único e o **catálogo em
 Postgres dá snapshot isolation / evita a briga de concorrência** que era o problema do
 `.duckdb`. O Delta fica como fallback caso um cliente exija interop com Spark/Databricks no
-próprio lake. Trade-off assumido: DuckLake é novo (1.0) → maturidade é o [ponto a verificar](pontos-a-verificar.md).
+próprio lake. Trade-off assumido: DuckLake é novo (1.0) → maturidade **era** o [ponto a verificar](pontos-a-verificar.md); ✅ o [benchmark 2026-07-19](../../../BENCHMARK-LAKEHOUSE.md) rodou **2M + 1M linhas** de ponta a ponta (raw → clean → grafo) sem problema — resta só a concorrência multi-conector.
 
 > ⚠️ **Cuidados que a decisão traz (rastreados na [tarefa 01](tarefas/01-lakehouse/)):**
 > (1) o **`run_sql`** (skills-api) hoje só faz glob de **parquet** e **nem olha pra CLEAN** —
@@ -92,6 +92,10 @@ o SQL da clean pra uma tabela enrichment, há `autogenerate_clean`. **Implicaç�
 lake ganha uma **terceira camada** (`enrichment`, também no DuckLake) — o `LakeStore` da
 migração precisa controlá-la junto de RAW/CLEAN (ver [tarefa 01](tarefas/01-lakehouse/) e [migracao](tarefas/01-lakehouse/migracao.md)).
 
+> 💡 **Sugestão a avaliar: fazer o enrichment em SQL/dbt com a extensão [`duckdb-ai`](https://github.com/leonardovida/duckdb-ai)** (`INSTALL ai FROM community`). Ela roda LLM **direto no DuckDB** — `ai_complete`, `ai_extract_record`/`ai_complete_json` (structured output), `ai_classify`, `ai_embed`, com **batch, cache e custo** embutidos, e suporta **Anthropic/OpenAI/Ollama/LiteLLM** (os mesmos providers que já usamos). Isso permitiria o `RAW → enrichment` virar um **model dbt** (`SELECT ai_extract_record(...) FROM raw`) em vez de um estágio Python separado — **uma engine só** (DuckDB) pra ingestão, enrichment, transform e federation.
+>
+> 🛑 **A verificar antes de adotar:** paridade com o `ai_enrichment` atual (cache por versão de rubrica/código, retry/dead-letter, budget de custo, dependência dura antes da clean); **maturidade** (v0.4.x, projeto novo); e se escreve bem no DuckLake. Vira ponto em [pontos-a-verificar](pontos-a-verificar.md) / [tarefa 01](tarefas/01-lakehouse/). Clone local: `~/Repos/duckdb-ai`.
+
 ---
 
 ## Findings medidos
@@ -117,6 +121,29 @@ Modelo com transforms + join + window, single-node (8 cores, 8 GB)
 `materialized='incremental'` dá **8× a 2% de delta** (ganho cresce com a tabela).
 Pré-requisito: **`updated_at` na clean** (só 18/42 models têm hoje) →
 [tarefas/01-lakehouse](tarefas/01-lakehouse/).
+
+### 📊 Benchmark ponta-a-ponta no DuckLake (2M pg + 1M mongo) — 2026-07-19
+
+O [BENCHMARK-LAKEHOUSE](../../../BENCHMARK-LAKEHOUSE.md) validou a arquitetura 2.0 no volume
+real, num notebook de 8 GB (Docker VM 3,8 GB), usando os conectores/flows/dbt/worker de
+produção (não um caminho à parte):
+
+| Estágio | Volume | Tempo | Pico RAM |
+|---|---:|---:|---:|
+| Ingestão postgres → raw (DuckLake/Parquet) | 2.000.000 | 36,9 s | 272 MB |
+| Ingestão mongo → raw (2 collections) | 1.000.500 | 25,0 s | 272 MB |
+| Clean (dbt/DuckLake, com join Mongo×Mongo) | 3.000.500 | 3,8 s | 382 MB |
+| Incremental (+150k, merge por PK) | 150.000 | 3,5 s | **0 duplicatas** |
+| Grafo (fatia 290k nós + 300k arestas) | 590k elem | 126 s ¹ | 302 MB (FalkorDB) |
+
+¹ Após otimizar o `execute_batch`: **1 `MERGE`/linha → `UNWIND` batch, 2,87×** (era 362 s).
+
+- 💡 **DuckLake aguenta:** streaming ponta a ponta, RAM **constante** (~272 MB) independente do
+  volume; o Parquet aberto (171 MB) ficou **mais compacto** que os bancos de origem (306 + 170 MB).
+- 💡 **Incremental barato:** o delta custa o tamanho da **mudança**, não da base (100k em 2,2 s
+  vs 2M em 37 s no bootstrap).
+- 🛑 **Grafo é o estágio mais pesado** (limitado por RAM + velocidade de escrita) → detalhe +
+  projeção por RAM em [pontos §1/§3](pontos-a-verificar.md).
 
 ---
 

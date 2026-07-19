@@ -70,11 +70,11 @@ flowchart LR
 
 | # | Aberto (validar/medir — não é mais escolha) | Onde |
 |---|---|---|
-| A | **Maturidade do DuckLake (1.0)** + catálogo Postgres sob concorrência | [tarefa 01](tarefas/01-lakehouse/) |
+| A | ✅ **DuckLake aguentou 2M+1M** (benchmark: streaming, RAM 272 MB constante, clean 3M em 3,8s) — resta **concorrência multi-conector** no mesmo model | [tarefa 01](tarefas/01-lakehouse/) · [benchmark](../../../BENCHMARK-LAKEHOUSE.md) |
 | B | **Maturidade da extensão ADBC** (comunidade) p/ Snowflake/Databricks | [tarefa 03](tarefas/03-federation/) · [pontos §4](pontos-a-verificar.md) |
 | C | **`run_sql` só lê parquet — nem olha a CLEAN** (atachar o catálogo DuckLake) | [tarefa 01](tarefas/01-lakehouse/) · [migracao](tarefas/01-lakehouse/migracao.md) |
 | D | **Migração via classe `LakeStore`** (worker, catalog-api, run_sql leem o lake) | [tarefa 01 §E](tarefas/01-lakehouse/) · [migracao](tarefas/01-lakehouse/migracao.md) |
-| E | Performance do grafo · data quality · deep-dive por conector · **grafo em container separado** | [pontos-a-verificar](pontos-a-verificar.md) |
+| E | ✅ **Performance do grafo medida** (benchmark: `UNWIND` 2,87×, footprint ~510 B/elem) · resta data quality · deep-dive por conector · **grafo em container separado** | [pontos §1/§3](pontos-a-verificar.md) · [benchmark](../../../BENCHMARK-LAKEHOUSE.md) |
 
 ---
 

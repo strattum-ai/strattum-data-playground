@@ -21,6 +21,7 @@ Complementa os docs de arquitetura ([`docs/arquitetura/`](../docs/arquitetura/))
 | [`07-federation-dbt-clean/`](07-federation-dbt-clean/) | **dbt** juntando RAW (DuckLake) + fonte **federada (Trino)** → **CLEAN nova na DuckLake** | ✅ federation na escrita funciona |
 | [`08-federation-adbc-databricks/`](08-federation-adbc-databricks/) | Federação via **extensão ADBC do DuckDB** — lê Databricks/Snowflake **direto**, sem Trino/plugin | ✅ 3ª via de federação (ADBC) |
 | [`09-ducklake-concorrencia/`](09-ducklake-concorrencia/) | **N conectores escrevendo juntos** no DuckLake — catálogo `.duckdb` vs **Postgres**, dados no MinIO | ✅ catálogo Postgres = escrita concorrente |
+| [`10-enrichment-duckdb-ai/`](10-enrichment-duckdb-ai/) | Camada **enrichment (LLM) como SQL/dbt** via extensão [`duckdb-ai`](https://github.com/leonardovida/duckdb-ai) — `ai_extract_record`, custo/cache, grava na DuckLake | 🛑 paridade com o `ai_enrichment` (a rodar) |
 
 > Cada pasta tem seu `README.md`. A camada de dados (`.data/`) fica na raiz de
 > `experimentacoes` (os notebooks fazem `os.chdir` pra cá na 1ª célula via `exp.py`).
