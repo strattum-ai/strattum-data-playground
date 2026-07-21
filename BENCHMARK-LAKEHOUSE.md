@@ -1,5 +1,7 @@
 # Strattum — Benchmark do Lakehouse Aberto
 
+> 🇬🇧 English version: [BENCHMARK-LAKEHOUSE.en.md](BENCHMARK-LAKEHOUSE.en.md)
+
 > **De 2 bancos operacionais a um grafo de conhecimento, em minutos, num notebook.**
 > 3 milhões de registros (PostgreSQL + MongoDB) → lakehouse aberto (DuckLake + Parquet/S3)
 > → camada *clean* modelada → grafo de entidades — medido ponta a ponta.
@@ -202,7 +204,7 @@ ambas gravando a **mesma** coisa, versionada:
 
 ---
 
-## Footprint & projeção no cliente
+## Footprint, projeção e custos no cliente (AWS)
 
 ### Quanto os dados ocupam (medido)
 
@@ -226,14 +228,21 @@ dataset.
 O benchmark rodou num notebook de 8 GB de propósito. Num servidor, cada estágio escala
 diferente — e o gargalo **não** é onde a maioria pensa.
 
-**Lake (Parquet em S3) — praticamente ilimitado.** A ~56 bytes/linha comprimido, é object
-storage barato:
+**Lake (Parquet em S3) — praticamente ilimitado, e custa centavos.** A ~56 bytes/linha
+comprimido (medido: 3M linhas → 171 MB), o storage dos *arquivos* é a parte mais barata da
+conta. Preço do S3 Standard por GB·mês: **US$ 0,023** em us-east-1 · **US$ 0,0405** em
+São Paulo (sa-east-1):
 
-| Linhas | Parquet no lake | Storage (~US$ 0,023/GB/mês) |
-|---:|---:|---:|
-| 100 milhões | ~5,6 GB | ~US$ 0,13/mês |
-| 1 bilhão | ~56 GB | ~US$ 1,30/mês |
-| 10 bilhões | ~560 GB | ~US$ 13/mês |
+| Linhas | Parquet no lake | S3 us-east-1 | S3 São Paulo |
+|---:|---:|---:|---:|
+| 100 milhões | ~5,6 GB | ~US$ 0,13/mês | ~US$ 0,23/mês |
+| 1 bilhão | ~56 GB | ~US$ 1,30/mês | ~US$ 2,27/mês |
+| 10 bilhões | ~560 GB | ~US$ 13/mês | ~US$ 23/mês |
+
+O catálogo DuckLake não adiciona custo próprio: são ~30 tabelas de metadados no **mesmo
+Postgres** que a plataforma já roda. Requests S3 (PUT/GET) são desprezíveis neste padrão de
+acesso — a ingestão escreve arquivos de micro-batch (poucos milhares de PUTs por sync, a
+US$ 0,005/1k) e as leituras são scans colunares, não milhões de GETs pequenos.
 
 **Ingestão — linear no tempo, RAM constante** (~48,5k linhas/s, ~272 MB fixos → nunca dá
 OOM): 100M linhas ≈ **~34 min**, 1B linhas ≈ **~5,7 h**. Com mais cores / conectores em
@@ -262,16 +271,62 @@ milissegundos (GraphBLAS). O limite prático da **carga inicial** é a velocidad
 hoje ~4.680 elem/s (com UNWIND); pra grafos grandes, o `falkordb-bulk-loader` faz
 milhões/s. Depois disso, o worker mantém o grafo **por delta** (barato).
 
-**Exemplo — cliente médio** (2M clientes + 8M contratos + ~100k mudanças/dia):
-- **Lake:** ~600 MB de Parquet (~US$ 0,02/mês de storage).
-- **Ingestão inicial** ~3–4 min · **clean** ~1 min.
-- **Grafo:** ~10M nós + ~24M arestas ≈ 34M elementos → cabe num servidor de **~48 GB**;
-  carga inicial via bulk-loader em minutos.
-- **Sync diário:** ~100k linhas → **segundos**.
+### Quanto custa deixar o grafo em RAM (AWS)
+
+RAM é o único recurso que o grafo consome de verdade — e na AWS ela é comprada junto com a
+instância. Para grafos que ainda cabem na VM da plataforma, o custo extra é **zero**: na VM
+starter de 16 GB, o FalkorDB fica com uma fatia de ~4 GB (teto de cgroup do compose) →
+**até ~4–5M elementos sem nenhum custo adicional**. Acima disso, o grafo vai pra um **nó
+dedicado memory-optimized** (família `r8g`, Graviton4 — 8 GB de RAM por vCPU, o melhor
+US$/GB da AWS). Preços on-demand Linux (jul/2026):
+
+| Elementos no grafo | RAM (c/ folga de query) | Instância | us-east-1 | São Paulo |
+|---:|---:|---|---:|---:|
+| até ~5M | fatia da VM starter | — (compartilhada) | US$ 0 extra | US$ 0 extra |
+| ~19M | 16 GB | `r8g.large` | ~US$ 86/mês | ~US$ 162/mês |
+| ~38M | 32 GB | `r8g.xlarge` | ~US$ 172/mês | ~US$ 324/mês |
+| ~75M | 64 GB | `r8g.2xlarge` | ~US$ 344/mês | ~US$ 647/mês |
+| ~150M | 128 GB | `r8g.4xlarge` | ~US$ 688/mês | ~US$ 1.294/mês |
+
+Ou seja: **RAM de grafo custa ~US$ 5,4/GB·mês em us-east-1 e ~US$ 10/GB·mês em São Paulo**
+(on-demand; um savings plan de 1 ano corta ~35%). A persistência do grafo (snapshot RDB +
+AOF) vai pro disco EBS e é irrelevante na conta — os 590k elementos deste benchmark geraram
+**84 MB** de snapshot (~US$ 0,01/mês em gp3). A regra operacional que já usamos no compose
+vale aqui também: o teto de RAM da instância deve ficar **acima** do `maxmemory` do FalkorDB,
+para o fork do BGSAVE/AOF-rewrite ter folga.
+
+### A VM da plataforma (o resto da conta)
+
+O restante da stack (ingestão, dbt, APIs, Prefect, Postgres, Qdrant) roda na VM starter —
+`t4g.xlarge` (4 vCPU / 16 GB, Graviton2, ADR-005): **~US$ 98/mês** em us-east-1 ·
+**~US$ 157/mês** em São Paulo, mais o disco EBS gp3 (US$ 0,08 · US$ 0,152 por GB·mês —
+100 GB ≈ US$ 8 · US$ 15). Ingestão e clean são **streaming com RAM constante** (§1–2),
+então a mesma VM serve de 3M a centenas de milhões de linhas — o tempo cresce, a máquina não.
+
+**Exemplo — cliente médio** (2M clientes + 8M contratos + ~100k mudanças/dia), conta AWS
+completa em São Paulo:
+
+- **Lake (arquivos):** ~600 MB de Parquet → **~US$ 0,03/mês** de S3.
+- **Ingestão inicial** ~3–4 min · **clean** ~1 min (na própria VM).
+- **Grafo:** ~10M nós + ~24M arestas ≈ 34M elementos → 48 GB c/ folga → nó dedicado
+  `r8g.2xlarge` (64 GB) → **~US$ 647/mês** (us-east-1: ~US$ 344); carga inicial via
+  bulk-loader em minutos.
+- **VM da plataforma:** `t4g.xlarge` + 100 GB gp3 → **~US$ 172/mês** (us-east-1: ~US$ 106).
+- **Sync diário:** ~100k linhas → **segundos** (o delta é a conta permanente, e é ínfima).
+
+> **Total infra AWS: ~US$ 820/mês em São Paulo (~US$ 450 em us-east-1), on-demand** — e o
+> item dominante é a RAM do grafo, que só cresce se o *grafo* crescer. Sem warehouse
+> proprietário, sem cluster, tudo BYOC na conta do cliente.
 
 Tudo num único servidor **BYOC** (na nuvem do próprio cliente), sem data warehouse
 proprietário. **O que escala pra bilhões (lake, ingestão, incremental) é barato; o que é
 limitado por RAM (grafo) sobe com o servidor — e o custo permanente é sempre o do delta.**
+
+> **Fontes de preço (jul/2026, on-demand Linux):** tabela oficial AWS — `r8g.large`
+> sa-east-1 US$ 0,2216/h e `t4g.large` sa-east-1 US$ 0,1072/h (⇒ `t4g.xlarge` US$ 0,2144/h);
+> us-east-1: `t4g.xlarge` US$ 0,1344/h · `r8g.large` US$ 0,1178/h; EBS gp3 sa-east-1
+> US$ 0,152/GB·mês. Mensal = hora × 730. S3 Standard sa-east-1 US$ 0,0405/GB·mês (primeiros
+> 50 TB) — conferir na calculadora AWS ao fechar proposta; câmbio R$ não aplicado.
 
 ---
 

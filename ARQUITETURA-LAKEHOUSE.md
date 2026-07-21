@@ -1,5 +1,7 @@
 # Arquitetura — Strattum Lakehouse (lake aberto)
 
+> 🇬🇧 English version: [ARQUITETURA-LAKEHOUSE.en.md](ARQUITETURA-LAKEHOUSE.en.md)
+
 **Status:** vigente (referência da arquitetura em produção) · **Escopo:** como os dados entram (connectors), viram tabelas (lake), são modelados (dbt clean) e viram grafo (memory-worker).
 
 Resumo em 3 linhas: cada **connector** puxa dados de uma fonte e grava na **`raw`** do lake; o **dbt** transforma `raw → clean`; o **memory-worker** lê a `clean` e monta o **grafo**. O lake é **DuckLake** (catálogo em Postgres + Parquet em MinIO/S3), acessado por um único ponto: **`LakeStore`**.
@@ -84,7 +86,7 @@ O nome do `@flow` = nome do arquivo (o `deploy.py` descobre por glob). Todo flow
 
 - **dbt clean** lê `lake.raw."<c>__..."`. O `run_dbt_for_connector("<c>")` **auto-descobre** os models que dependem do connector e roda só eles (pula os de 0 linhas). In-process (`dbtRunner`).
 - **Concorrência (advisory lock):** um model *cross-source* (ex. `clean.customers` de postgres **e** mongodb) é descoberto pelos dois flows e colidiria no commit do DuckLake. O `_run_dbt` **serializa por model** com um advisory lock do Postgres (`connectors/utils/locks.py`): 1 run por model por vez, fail-open, kill-switch `DBT_LOCK_DISABLED`. Detalhe no [exp 09](experimentacoes/09-ducklake-concorrencia/).
-- **ACL:** todo model clean carrega `acl_allow`/`acl_deny` (macro `strattum_acl_columns()`, preenchido depois — ADR-019).
+- **ACL:** todo model clean carrega `acl_allow`/`acl_deny` (macro `strattum_acl_columns()` — ADR-019). As permissões são **extraídas por objeto das duas vias** (fontes com ETL **e** federadas) por uma task Prefect e gravadas em `auth.access_grant` — **no mesmo Postgres do catálogo**; um processo recorrente **aplica** as colunas na clean a cada sync.
 - **Bancos:** clean gerado em runtime (a catalog-api sintetiza o SELECT: PK→`external_id`, PII `drop`/`hash`).
 - **Enrichment (opcional):** com AI transforms roda `raw → enrichment → clean`; senão `raw → clean` direto.
 

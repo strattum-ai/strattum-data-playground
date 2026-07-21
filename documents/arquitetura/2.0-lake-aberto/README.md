@@ -45,13 +45,22 @@ flowchart LR
     CAT -.-> ER
     CAT -.-> CC
     ONT["Ontologia"] --> MW
-    CC -->|No ETL| MW["Memory Worker<br/>DuckDB + Cypher"]
+    CC -->|With ETL| MW["Memory Worker<br/>DuckDB + Cypher"]
     EN -->|No ETL| MW
     MW --> FK["FalkorDB"]
+    MCP["MCP"] -->|expõe| RS["run_sql"]
+    MCP -->|consome| FK
+    RS -.->|"lê (Parquet via catálogo)"| CC
+    RS -.->|"lê (federado)"| EN
+    FF -.->|"ACL por objeto"| ACL["Extração de ACL<br/>(Prefect — ADR-019)"]
+    LC -.->|"ACL por objeto"| ACL
+    ACL --> AG["Postgres · auth.access_grant<br/>(o MESMO do catálogo)"]
+    AG -->|"aplica acl_allow/acl_deny (a cada sync)"| CC
 ```
 
 > Storage = **DuckLake** (catálogo Postgres, dados em object storage). Federation =
-> **DuckDB + ADBC**. Diagrama polido: [diagramas/2.0-visao-geral.svg](../diagramas/2.0-visao-geral.svg).
+> **DuckDB + ADBC**. Diagrama polido: [assets/arquitetura-lake.svg](../../../assets/arquitetura-lake.svg)
+> (🇬🇧 [en](../../../assets/arquitetura-lake.en.svg)).
 
 ---
 
