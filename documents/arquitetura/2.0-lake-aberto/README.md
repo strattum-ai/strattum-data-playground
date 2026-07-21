@@ -52,6 +52,7 @@ flowchart LR
     MCP -->|consome| FK
     RS -.->|"lê (Parquet via catálogo)"| CC
     RS -.->|"lê (federado)"| EN
+    EN -.->|"join c/ raw/enrichment → materializa (roadmap)"| CC
     FF -.->|"ACL por objeto"| ACL["Extração de ACL<br/>(Prefect — ADR-019)"]
     LC -.->|"ACL por objeto"| ACL
     ACL --> AG["Postgres · auth.access_grant<br/>(o MESMO do catálogo)"]

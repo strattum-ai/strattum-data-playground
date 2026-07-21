@@ -40,6 +40,12 @@ The two paths converge on the **same graph** and are served by the **same**
 `run_sql`/MCP. The rest of this document details the **with-ETL** path (what runs in
 production today); federation is in [§7](#7-the-3-reference-archetypes) and in ADR-020.
 
+> **Possible feature — hybrid clean:** a `clean` model will be able to **join**
+> federated data (ADBC) with the lake's `raw`/`enrichment` in the same `JOIN`. In that
+> case — and only that one — the result **is materialized into the lake** (the federated
+> data does get stored): that model gives up zero-copy in exchange for crossing the
+> sources.
+
 > **Where to touch the code:** new connector → `services/pipelines/src/connectors/<c>/`
 > + `flows/<c>_sync.py` · modeling → `dbt/models/clean/` · graph ontology →
 > `graph_mapping.yaml`. Lake access is **always** via `strattum_core.lake.LakeStore` —

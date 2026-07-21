@@ -29,6 +29,11 @@ O lake tem **cinco caixas** e **um só destino**:
 
 Os dois caminhos convergem no **mesmo grafo** e são servidos pelo **mesmo** `run_sql`/MCP. O resto deste documento detalha o caminho **com ETL** (o que roda em produção hoje); a federação está na [§7](#7-os-3-arquétipos-de-referência) e no ADR-020.
 
+> **Feature possível — clean híbrida:** um model `clean` vai poder **juntar** dado
+> federado (ADBC) com `raw`/`enrichment` do lake no mesmo `JOIN`. Nesse caso — e só
+> nesse — o resultado **é materializado no lake** (o dado federado passa a ser guardado
+> no banco): abre-se mão do zero-cópia nesse model em troca do cruzamento das fontes.
+
 > **Onde mexer no código:** conector novo → `services/pipelines/src/connectors/<c>/` + `flows/<c>_sync.py` · modelagem → `dbt/models/clean/` · ontologia do grafo → `graph_mapping.yaml`. O acesso ao lake é **sempre** via `strattum_core.lake.LakeStore` — nunca SQL de lake na mão.
 
 ---
