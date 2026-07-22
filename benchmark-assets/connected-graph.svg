@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 470" font-family="Inter, -apple-system, Segoe UI, Roboto, sans-serif">
 <rect x="0" y="0" width="760" height="470" fill="#ffffff"/>
-<text x="28" y="34" font-size="16.5" font-weight="700" fill="#0F1035">Primeiro paint — agora conectado</text>
-<text x="28" y="55" font-size="12" fill="#64748b">Amostra semeada por arestas: cada contrato (●) liga suas duas partes (usuários) e o produto — os "digital twins", repetidos.</text>
+<text x="28" y="34" font-size="16.5" font-weight="700" fill="#0F1035">First paint — now connected</text>
+<text x="28" y="55" font-size="12" fill="#64748b">Edge-seeded sample: each contract (●) links its two parties (users) and the product — the "digital twins", repeated.</text>
 <line x1="110.8" y1="114.6" x2="133.3" y2="73.8" stroke="#CBD5E1" stroke-width="1.4"/>
 <line x1="110.8" y1="114.6" x2="135.5" y2="154.2" stroke="#CBD5E1" stroke-width="1.4"/>
 <line x1="110.8" y1="114.6" x2="64.3" y2="111.7" stroke="#CBD5E1" stroke-width="1.4"/>
@@ -80,9 +80,9 @@
 <circle cx="474.0" cy="365.5" r="10.5" fill="#D97706" stroke="#ffffff" stroke-width="2"/>
 <circle cx="669.8" cy="350.0" r="10.5" fill="#D97706" stroke="#ffffff" stroke-width="2"/>
 <circle cx="38" cy="442" r="10.5" fill="#D97706"/>
-<text x="57" y="446" font-size="12" fill="#475569">Contrato</text>
+<text x="57" y="446" font-size="12" fill="#475569">Contract</text>
 <circle cx="154" cy="442" r="7" fill="#2563EB"/>
-<text x="169" y="446" font-size="12" fill="#475569">Usuário</text>
+<text x="169" y="446" font-size="12" fill="#475569">User</text>
 <circle cx="258" cy="442" r="7" fill="#059669"/>
-<text x="273" y="446" font-size="12" fill="#475569">Produto</text>
+<text x="273" y="446" font-size="12" fill="#475569">Product</text>
 </svg>

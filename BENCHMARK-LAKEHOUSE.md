@@ -1,168 +1,227 @@
-# Strattum — Benchmark do Lakehouse Aberto
+# Strattum — Open Lakehouse Benchmark
 
-> 🇬🇧 English version: [BENCHMARK-LAKEHOUSE.en.md](BENCHMARK-LAKEHOUSE.en.md)
+> **From 2 operational databases to a knowledge graph, in minutes, on a laptop.**
+> 3 million records (PostgreSQL + MongoDB) → open lakehouse (DuckLake + Parquet/S3)
+> → modeled *clean* layer → entity graph — measured end to end.
 
-> **De 2 bancos operacionais a um grafo de conhecimento, em minutos, num notebook.**
-> 3 milhões de registros (PostgreSQL + MongoDB) → lakehouse aberto (DuckLake + Parquet/S3)
-> → camada *clean* modelada → grafo de entidades — medido ponta a ponta.
-
-Este documento reporta um benchmark **reprodutível** da plataforma Strattum rodando
-**inteira num único MacBook (8 GB de RAM)**. O objetivo é responder, com números, a
-uma pergunta simples: *quão rápido e quão barato qualquer empresa consegue transformar
-os próprios dados operacionais em algo útil?*
+This document reports a **reproducible** benchmark of the Strattum platform running
+**entirely on a single MacBook (8 GB of RAM)**. The goal is to answer, with numbers, a
+simple question: *how fast and how cheaply can any company turn its own operational
+data into something useful?*
 
 ---
 
 ## TL;DR
 
-| O que | Volume | Tempo | Throughput | Pico de RAM |
+| What | Volume | Time | Throughput | Peak RAM |
 |---|---:|---:|---:|---:|
-| **Ingestão** PostgreSQL → lake | 2.000.000 linhas | **36,9 s** | ~54.200 linhas/s | 272 MB |
-| **Ingestão** MongoDB → lake | 1.000.500 docs | **25,0 s** | ~40.500 docs/s | 272 MB |
-| **Transformação** (dbt/DuckLake) | 3.000.500 linhas | **3,8 s** | ~795.000 linhas/s | 382 MB |
-| **Sync incremental** (+150k) | 150.000 linhas | **3,5 s** | delta-only, 0 duplicatas | 267 MB |
-| **Grafo de conhecimento** | 290.756 nós · 300.000 arestas | **126 s** ¹ | ~4.680 elem/s | 250 MB (worker) · 302 MB (FalkorDB) |
+| **Ingestion** PostgreSQL → lake | 2,000,000 rows | **36.9 s** | ~54,200 rows/s | 272 MB |
+| **Ingestion** MongoDB → lake | 1,000,500 docs | **24.9 s** | ~40,200 docs/s | 272 MB |
+| **Transformation** (dbt/DuckLake) | 3,000,500 rows | **3.8 s** | ~790,000 rows/s | 382 MB |
+| **Bootstrap end to end** (ingest + model) | **3,000,500 rows** | **65.6 s** | ~45,700 rows/s | ≤ 382 MB |
+| **Incremental sync** (+150k) | 150,000 rows | **3.5 s** | delta-only, 0 duplicates | 267 MB |
+| **Knowledge graph** | 290,756 nodes · 300,000 edges | **126 s** ¹ | ~4,690 elem/s | 250 MB (worker) · 302 MB (FalkorDB) |
 
-¹ Grafo numa **fatia representativa** (100k contratos + entidades ligadas); build otimizado
-de 362 s → 126 s durante o benchmark (ver §4). Ingestão e *clean* rodaram no volume **cheio**.
+¹ Graph built on a **representative slice** (100k contracts + linked entities); build
+optimized from 362 s → 126 s during the benchmark itself (see §4). Ingestion and *clean*
+ran on the **full** volume.
 
-**3 milhões de linhas ingeridas + modeladas em ~66 segundos, com pico de ~380 MB de RAM
-por processo** — em hardware de mesa, sobre formatos 100% abertos (Parquet + catálogo
-DuckLake), sem data warehouse proprietário e sem cluster.
-
----
-
-## O cenário
-
-Uma empresa média tem os dados espalhados: um **PostgreSQL** com o cadastro de pessoas,
-um **MongoDB** com os contratos/processos, planilhas, um ERP. Ninguém "faz nada com data"
-porque juntar tudo isso normalmente exige um projeto de meses, um data warehouse caro e
-um time dedicado.
-
-O benchmark simula exatamente esse caso com dados sintéticos realistas:
-
-- **PostgreSQL — `users`**: 2.000.000 de usuários (id, nome, e-mail, CPF, cidade, timestamps).
-- **MongoDB — 2 coleções**:
-  - `contracts`: 1.000.000 de contratos, cada um com **duas partes** (`processante` e
-    `processado`, ambos referenciando um usuário) + produto, status e valor;
-  - `products`: 500 produtos (id → nome/categoria).
-- **Incremento**: +100.000 usuários e +50.000 contratos, para medir o custo de um
-  sync do dia seguinte.
-
-O alvo: uma camada *clean* com **uma tabela de usuários** e **uma tabela de contratos**
-(já com o `JOIN` das duas coleções do Mongo, trazendo o nome do produto), e um **grafo**
-onde cada contrato conecta suas duas partes e seu produto.
+**3 million rows from two operational databases to a modeled *clean* layer in ~66
+seconds** — that is the **Bootstrap** row above: 61.8 s of ingestion (36.9 s PostgreSQL
++ 24.9 s MongoDB, run sequentially) + 3.8 s of dbt modeling = **65.6 s**, peaking at
+~380 MB of RAM per process. On desk hardware, over 100% open formats (Parquet + DuckLake
+catalog), with no proprietary data warehouse and no cluster.
 
 ---
 
-## Setup (deliberadamente modesto)
+## The pipeline in one picture
 
-| Item | Valor |
+Before the numbers, the thing being measured. This is the architecture under test —
+every stage below maps to one box:
+
+![How data comes in, becomes a graph, and is served](assets/arquitetura-lake.svg)
+
+1. **Connect** the source in the console (PostgreSQL, MongoDB, …). Credentials live in
+   the connector registry; table/collection selection and sync mode (full/incremental,
+   cursor, PK) live in the connector state.
+2. **Ingest** into the lake's `raw` — Parquet on S3/MinIO, cataloged by **DuckLake**.
+   Streaming end to end: constant memory, cursor-based incremental.
+3. **Model** with **dbt** running native DuckDB over the lake: normalization, `JOIN`s,
+   typing → `clean` layer, materialized back into the lake itself.
+4. **Build the graph**: the ontology maps `clean` → nodes and edges; the worker resolves
+   entities and materializes into **FalkorDB**. The result shows up in the console's
+   Memory.
+
+Everything on **open formats** (Parquet + a relational catalog). No warehouse lock-in,
+no proprietary copy of the data. The full design (LakeStore, federation, ACL) is in
+[ARQUITETURA-LAKEHOUSE.md](ARQUITETURA-LAKEHOUSE.md).
+
+---
+
+## What this benchmark measures
+
+Four requirements drove the investigation — each maps to a section below:
+
+1. **Load latency** — how long from "empty platform" to a modeled *clean* layer, at 3M
+   rows (§1–2: bootstrap ingestion + transformation).
+2. **Steady-state sync cost** — does the daily sync cost track the **delta** or the
+   full base? (§3: incremental).
+3. **Resource footprint & infra cost** — RAM and storage per stage, and the
+   extrapolated AWS bill ("Footprint, projection and costs").
+4. **Correctness** — 0 duplicates after the merge; 100% of graph edges resolved, 0
+   orphans (§3–4).
+
+**Not measured in this round:** query/serving latency under concurrent load (SQL, graph
+and MCP queries) and behavior on **dirty data** — both are planned follow-ups (see
+Methodology).
+
+---
+
+## The scenario
+
+A typical mid-size company has its data scattered: a **PostgreSQL** with the people
+registry, a **MongoDB** with contracts/cases, spreadsheets, an ERP. Nobody "does anything
+with data" because pulling it all together normally takes a months-long project, an
+expensive data warehouse and a dedicated team.
+
+The benchmark simulates exactly that case with realistic synthetic data:
+
+- **PostgreSQL — `users`**: 2,000,000 users (id, name, e-mail, national id, city, timestamps).
+- **MongoDB — 2 collections**:
+  - `contracts`: 1,000,000 contracts, each with **two parties** (`processante` and
+    `processado`, both referencing a user) + product, status and value;
+  - `products`: 500 products (id → name/category).
+- **Increment**: +100,000 users and +50,000 contracts, to measure the cost of a
+  next-day sync.
+
+The target: a *clean* layer with **one users table** and **one contracts table**
+(already `JOIN`ing the two Mongo collections to bring in the product name), and a
+**graph** where each contract connects its two parties and its product.
+
+---
+
+## Setup (deliberately modest)
+
+| Item | Value |
 |---|---|
-| Máquina | MacBook, Apple Silicon, 8 vCPU, **8 GB RAM** |
-| Docker (VM Linux) | **3,8 GB** para todos os containers |
-| Fontes | PostgreSQL 16, MongoDB 7 (containers) |
-| Lakehouse | **DuckLake** (catálogo em Postgres) + **Parquet** em **MinIO** (S3) |
-| Transformação | **dbt** rodando **DuckDB/DuckLake** nativo |
-| Grafo | **FalkorDB** (grafo de entidades) |
-| Orquestração | Prefect |
+| Machine | MacBook, Apple Silicon, 8 vCPU, **8 GB RAM** |
+| Docker (Linux VM) | **3.8 GB** for all containers |
+| Sources | PostgreSQL 16, MongoDB 7 (containers) |
+| Lakehouse | **DuckLake** (Postgres catalog) + **Parquet** on **MinIO** (S3) |
+| Transformation | **dbt** running native **DuckDB/DuckLake** |
+| Graph | **FalkorDB** (entity graph) |
+| Orchestration | Prefect |
 
-Nada aqui é "hardware de benchmark". É o que qualquer dev tem na mesa. O ponto é
-justamente esse: **a arquitetura aberta escala para baixo** — roda no notebook hoje e no
-cluster amanhã, sem trocar de formato.
+Nothing here is "benchmark hardware". It is what any dev has on their desk. That is
+precisely the point: **the open architecture scales down** — it runs on a laptop today
+and on a cluster tomorrow, without switching formats.
 
 ---
 
-## Resultados por estágio
+## Results by stage
 
-### 1) Ingestão (bootstrap — carga cheia)
+### 1) Ingestion (bootstrap — full load)
 
-Cada conector **faz streaming** da fonte (cursor server-side no Postgres, cursor em lote no
-Mongo) e grava Parquet no lake em micro-batches. Por isso o **pico de memória é constante
-(~272 MB) independentemente do volume** — o dataset inteiro nunca é carregado na RAM.
+Each connector **streams** from the source (server-side cursor in Postgres, batched
+cursor in Mongo) and writes Parquet to the lake in micro-batches. That is why the
+**memory peak is constant (~272 MB) regardless of volume** — the full dataset is never
+loaded into RAM.
 
-| Fonte | Linhas | Tempo | Throughput | Pico RAM | Parquet gerado |
+| Source | Rows | Time | Throughput | Peak RAM | Parquet written |
 |---|---:|---:|---:|---:|---:|
-| PostgreSQL `users` | 2.000.000 | 36,9 s | 54.200 l/s | 272 MB | 83 MB |
-| MongoDB `contracts` | 1.000.000 | 24,7 s | 40.500 l/s | 272 MB | 85 MB |
-| MongoDB `products` | 500 | 0,2 s | — | — | 36 KB |
-| **Total** | **3.000.500** | **~62 s** | **~48.500 l/s** | **272 MB** | **~168 MB** |
+| PostgreSQL `users` | 2,000,000 | 36.9 s | 54,200 r/s | 272 MB | 83 MB |
+| MongoDB `contracts` | 1,000,000 | 24.7 s | 40,500 r/s | 272 MB | 85 MB |
+| MongoDB `products` | 500 | 0.2 s | — | — | 36 KB |
+| **Total** | **3,000,500** | **61.8 s** | **~48,500 r/s** | **272 MB** | **~168 MB** |
 
-> 3 milhões de linhas viram ~168 MB de Parquet colunar comprimido — a base já fica pronta
-> para consulta analítica direta, sem cópia para um warehouse.
+> 3 million rows become ~168 MB of compressed columnar Parquet — the base is immediately
+> ready for direct analytical querying, with no copy into a warehouse.
 
-### 2) Transformação — camada *clean* (dbt sobre DuckLake)
+### 2) Transformation — *clean* layer (dbt over DuckLake)
 
-O dbt lê o `raw` e materializa três tabelas *clean* no próprio lake. A `clean.contracts`
-faz o **`JOIN` das duas coleções do Mongo** (contratos × produtos), normaliza tipos e traz
-o nome do produto para cada contrato.
+dbt reads `raw` and materializes three *clean* tables in the lake itself. `clean.contracts`
+**`JOIN`s the two Mongo collections** (contracts × products), normalizes types and brings
+the product name onto each contract.
 
-| Modelo | Linhas | Tempo |
+| Model | Rows | Time |
 |---|---:|---:|
-| `clean.products` | 500 | 0,40 s |
-| `clean.users` | 2.000.000 | 3,23 s |
-| `clean.contracts` (join) | 1.000.000 | 3,44 s |
-| **Total** | **3.000.500** | **3,8 s** |
+| `clean.products` | 500 | 0.40 s |
+| `clean.users` | 2,000,000 | 3.23 s |
+| `clean.contracts` (join) | 1,000,000 | 3.44 s |
+| **Total (wall time)** | **3,000,500** | **3.8 s** |
 
-Resultado: **0 contratos sem produto** (join íntegro), ~795 mil linhas/s. DuckDB sobre
-Parquet transforma milhões de linhas em segundos — sem mover dado para fora do lake.
+> The per-model times overlap: dbt runs the three models on **parallel threads**, so the
+> measured wall time (3.8 s) is less than their sum — the run is bounded by the slowest
+> model (`clean.contracts`, 3.44 s) plus startup.
 
-### 3) Sync incremental (o "dia seguinte")
+Result: **0 contracts without a product** (join intact), ~790k rows/s. DuckDB over
+Parquet transforms millions of rows in seconds — without moving data out of the lake.
 
-Depois de +100k usuários e +50k contratos nas fontes, o mesmo pipeline roda de novo. O
-cursor incremental lê **apenas o delta** (`updated_at > watermark`) e faz *merge* por chave
-primária — nada é reprocessado.
+### 3) Incremental sync (the "next day")
 
-| Fonte | Delta | Tempo | vs. bootstrap |
+After +100k users and +50k contracts land in the sources, the same pipeline runs again.
+The incremental cursor reads **only the delta** (`updated_at > watermark`) and *merges*
+by primary key — nothing is reprocessed.
+
+| Source | Delta | Time | vs. bootstrap |
 |---|---:|---:|---:|
-| PostgreSQL | 100.000 | **2,2 s** | **~17× mais rápido** |
-| MongoDB | 50.000 | **1,3 s** | ~19× mais rápido |
+| PostgreSQL | 100,000 | **2.2 s** | **~17× faster** |
+| MongoDB | 50,000 | **1.3 s** | ~19× faster |
 
-Verificado: `raw` foi para **exatamente** 2.100.000 / 1.050.000 linhas, **0 duplicatas**
-(o *merge* delete-then-insert por PK dedupe corretamente) e o watermark avançou. O custo do
-sync acompanha o **tamanho da mudança**, não o tamanho da base — é isso que torna a
-plataforma barata em regime permanente.
+Verified: `raw` went to **exactly** 2,100,000 / 1,050,000 rows, **0 duplicates**
+(the delete-then-insert *merge* by PK dedupes correctly) and the watermark advanced. The
+cost of the sync tracks the **size of the change**, not the size of the base — that is
+what makes the platform cheap in steady state.
 
-### 4) Grafo de conhecimento (FalkorDB)
+**What the watermark is, concretely.** It is the highest cursor value already ingested
+(here, `updated_at`), stored **per resource** in the platform's own Postgres
+(`connector_state`) — not in the orchestrator. The sync engine
+(`sync_resource_to_raw`) owns the whole cycle: it reads the stored value, queries the
+source with `cursor > last_value`, merges by PK, and persists the new maximum only
+**after the batch lands** — a failed run never advances it, so the next run safely
+re-reads the same delta (the merge by PK makes the retry idempotent). Prefect only
+*schedules* the runs; the state lives in the database.
 
-A ontologia mapeia a camada *clean* para um grafo: **`User`**, **`Contract`** e
-**`Product`**, com as arestas **`PROCESSANTE`** e **`PROCESSADO`** (contrato → usuário) e
-**`SOBRE`** (contrato → produto). A resolução de entidade é determinística (mesmo id →
-mesmo nó), então as duas partes de cada contrato apontam para os nós de usuário corretos.
+### 4) Knowledge graph (FalkorDB)
 
-> **Por que uma fatia?** Materializar o grafo **completo** (2,1M usuários + 1,05M contratos
-> ⇒ ~3,15M nós + ~3,15M arestas) exigiria **~3,3 GB só no FalkorDB** (extrapolado da medição
-> real, ~510 bytes/elemento) — não cabe na VM Docker de 3,8 GB do notebook, que ainda divide
-> RAM com Postgres/Mongo/MinIO. Então o grafo foi materializado sobre uma **fatia
-> representativa** — 100k contratos + os 190.256 usuários referenciados + 500 produtos ≈
-> **291k nós, 300k arestas** — medido, e a taxa projetada pro volume total. Ingestão e
-> *clean* rodaram sempre no volume **cheio** (2M/1M).
+The ontology maps the *clean* layer to a graph: **`User`**, **`Contract`** and
+**`Product`**, with the edges **`PROCESSANTE`** and **`PROCESSADO`** (contract → user)
+and **`SOBRE`** (contract → product). Entity resolution is deterministic (same id →
+same node), so the two parties of each contract point at the correct user nodes.
 
-O build passou por uma **otimização durante o próprio benchmark**. Estava fazendo **1 `MERGE`
-por linha** (um round-trip ao FalkorDB por nó e por aresta); reescrevi o `execute_batch` do
-memory-worker pra **agrupar cada lote num único `UNWIND $rows AS row ...`** (1 round-trip por
-lote de ~500):
+> **Why a slice?** Materializing the **full** graph (2.1M users + 1.05M contracts
+> ⇒ ~3.15M nodes + ~3.15M edges) would take **~3.3 GB in FalkorDB alone** (extrapolated
+> from the real measurement, ~510 bytes/element) — it does not fit in the laptop's 3.8 GB
+> Docker VM, which also shares RAM with Postgres/Mongo/MinIO. So the graph was
+> materialized over a **representative slice** — 100k contracts + the 190,256 referenced
+> users + 500 products ≈ **291k nodes, 300k edges** — measured, with the rate projected to
+> the full volume. Ingestion and *clean* always ran at **full** volume (2M/1M).
 
-| Métrica | Antes (1 MERGE/linha) | Depois (UNWIND) | Projeção grafo cheio |
+The build was **optimized during the benchmark itself**. It was doing **1 `MERGE` per
+row** (one round-trip to FalkorDB per node and per edge); I rewrote the memory-worker's
+`execute_batch` to **group each batch into a single `UNWIND $rows AS row ...`** (1
+round-trip per batch of ~500):
+
+| Metric | Before (1 MERGE/row) | After (UNWIND) | Full-graph projection |
 |---|---:|---:|---:|
-| Nós | 290.756 | 290.756 | ~3,15M |
-| Arestas | 300.000 | 300.000 | ~3,15M |
-| Tempo de build | 362 s | **126 s** | ~22 min |
-| Taxa | ~1.630 elem/s | **~4.680 elem/s** | — |
-| Pico RAM (worker) | 255 MB | 250 MB | — |
-| RAM FalkorDB | 302 MB | 302 MB | **~3,3 GB** |
+| Nodes | 290,756 | 290,756 | ~3.15M |
+| Edges | 300,000 | 300,000 | ~3.15M |
+| Build time | 362 s | **126 s** | ~22 min |
+| Rate | ~1,630 elem/s | **~4,690 elem/s** | — |
+| Peak RAM (worker) | 255 MB | 250 MB | — |
+| FalkorDB RAM | 302 MB | 302 MB | **~3.3 GB** |
 
-**2,87× mais rápido**, resultado idêntico, **0 fallbacks**. O ganho local é "só" ~3× porque
-na mesma máquina o round-trip é barato — o custo dominante virou o próprio `MERGE` no
-FalkorDB + a leitura do lake. **Num FalkorDB remoto (produção, outro host), onde a latência
-de rede domina, o UNWIND rende bem mais.** Próximo passo pra carga inicial de grafos grandes:
-`falkordb-bulk-loader` (CSV → grafo, milhões/s).
+**2.87× faster**, identical result, **0 fallbacks**. The local gain is "only" ~3× because
+on the same machine the round-trip is cheap — the dominant cost became the `MERGE` itself
+in FalkorDB + reading the lake. **Against a remote FalkorDB (production, another host),
+where network latency dominates, UNWIND yields much more.** Next step for the initial
+load of large graphs: `falkordb-bulk-loader` (CSV → graph, millions/s).
 
-**Qualidade:** 100% das arestas resolvidas — PROCESSANTE 100.000/100.000, PROCESSADO
-100.000/100.000, SOBRE 100.000/100.000, **0 órfãs**. A resolução de entidade determinística
-garante que as duas partes de cada contrato caem nos nós de usuário certos.
+**Quality:** 100% of edges resolved — PROCESSANTE 100,000/100,000, PROCESSADO
+100,000/100,000, SOBRE 100,000/100,000, **0 orphans**. Deterministic entity resolution
+guarantees the two parties of each contract land on the right user nodes.
 
-Sub-grafo real (um contrato e seu "digital twin") direto do FalkorDB:
+A real sub-graph (one contract and its "digital twin") straight from FalkorDB:
 
 ```cypher
 MATCH (c:Contract)-[:PROCESSANTE]->(a:User),
@@ -171,94 +230,114 @@ MATCH (c:Contract)-[:PROCESSANTE]->(a:User),
 RETURN c.contract_id, a.name, b.name, p.product_name, c.status, c.value LIMIT 2
 ```
 ```
-contract_id | processante       | processado      | produto      | status    | valor
-95152       | Usuário 400774    | Usuário 5093    | Produto 54   | encerrado | 42.933,20
-88258       | Usuário 1968098   | Usuário 8993    | Produto 485  | encerrado | 126.069,85
+contract_id | processante       | processado      | product      | status    | value
+95152       | Usuário 400774    | Usuário 5093    | Produto 54   | closed    | 42,933.20
+88258       | Usuário 1968098   | Usuário 8993    | Produto 485  | closed    | 126,069.85
 ```
 
-![Digital twin de um contrato](benchmark-assets/digital-twin.svg)
+![Digital twin of a contract](benchmark-assets/digital-twin.svg)
 
-_(Achados do benchmark no viz do grafo, já corrigidos: **(a)** o first-paint pedia 5.000 nós e
-estourava (HTTP 500) em grafos grandes — cap baixado; **(b)** o first-paint trazia só os nós de
-**entidade** e, num grafo hub-and-spoke (todo vínculo passa pelo **contrato**), isso pintava os
-usuários **soltos, sem nenhuma conexão** — "só vejo os nós". Corrigido: o primeiro paint agora vem
-de uma **amostra semeada por arestas** (via a query Cypher read-only), então já abre **conectado** —
-os "digital twins" acima aparecem de cara, sem precisar clicar. A expansão por-nó ainda não devolve
-todas as arestas de entrada — follow-up separado.)_
+_(Benchmark findings in the graph viz, already fixed: **(a)** first paint requested 5,000
+nodes and blew up (HTTP 500) on large graphs — cap lowered; **(b)** first paint fetched
+only **entity** nodes and, in a hub-and-spoke graph (every link goes through the
+**contract**), that painted users **floating, with no connection** — "all I see is
+nodes". Fixed: the first paint now comes from an **edge-seeded sample** (via the
+read-only Cypher query), so it opens **connected** — the "digital twins" above show up
+immediately, no clicking required. Per-node expansion still does not return every
+incoming edge — tracked as a separate follow-up.)_
 
-### A ontologia que gera esse grafo
+### The ontology that generates this graph
 
-O grafo acima não é hardcoded — sai de um **mapa declarativo** (`graph_mapping.yaml`): nós
-`User`/`Product`/`Contract` (cada um lendo uma tabela `clean`) + arestas `PROCESSANTE`/`PROCESSADO`/`SOBRE`
-ligando contrato → partes e produto. Como `postgres`/`mongodb` são *dynamic-schema* (o schema é do
-cliente), esse mapa é **escrito por cliente** — aqui, à mão, como faria o FDE. Duas formas de criar/editar,
-ambas gravando a **mesma** coisa, versionada:
+The graph above is not hardcoded — it comes from a **declarative map**
+(`graph_mapping.yaml`): `User`/`Product`/`Contract` nodes (each reading a `clean` table)
++ `PROCESSANTE`/`PROCESSADO`/`SOBRE` edges linking contract → parties and product. Since
+`postgres`/`mongodb` are *dynamic-schema* (the schema belongs to the customer), this map
+is **written per customer** — here, by hand, as the FDE would. Two ways to create/edit
+it, both writing the **same** thing, versioned:
 
-- **Pela API** (FDE / automação): `PUT /v1/ontology` (salva) + `POST /v1/ontology/apply` (aplica) — foi
-  assim que registrei a **Versão 4** deste benchmark.
-- **Pela UI** (cliente): **Configurações → Ontologia → aba YAML → Editar → Salvar e aplicar**. O console
-  valida o YAML *e* as colunas contra as tabelas `clean` reais, salva e aplica num clique, com histórico
-  de versões pra rollback.
+- **Via the API** (FDE / automation): `PUT /v1/ontology` (saves) + `POST
+  /v1/ontology/apply` (applies) — that is how **Version 4** of this benchmark was
+  registered.
+- **Via the UI** (customer): **Settings → Ontology → YAML tab → Edit → Save and apply**.
+  The console validates the YAML *and* the columns against the real `clean` tables, saves
+  and applies in one click, with version history for rollback.
 
-![Ontologia no console — Configurações → Ontologia (YAML), Versão 4 · Atual](benchmark-assets/ontology-ui-yaml.png)
+![Ontology in the console — Settings → Ontology (YAML), Version 4 · Current](benchmark-assets/ontology-ui-yaml.png)
+
+### Versioning — ontology × data × graph
+
+The three layers version differently, **by design**:
+
+| Layer | Versioned? | How |
+|---|---|---|
+| **Ontology** | ✅ explicit versions | history + rollback (this benchmark's map is **Version 4**) |
+| **Lake data** (`raw`/`clean`) | ✅ snapshots | every DuckLake commit is a snapshot in the Postgres catalog — tables are queryable *as of* any snapshot (time travel) |
+| **Graph** (FalkorDB) | ❌ deliberately not | it is a **derived projection**, not a source of truth |
+
+FalkorDB keeps no history — and it does not need to. The graph is rebuilt
+**deterministically** from *(clean snapshot × ontology version)*: entity ids are minted
+deterministically, so the same inputs always produce the same graph. "Yesterday's graph"
+= yesterday's lake snapshot + the ontology version that was current then. Versioning the
+graph itself would duplicate state the lake and the ontology registry already hold.
 
 ---
 
-## Footprint, projeção e custos no cliente (AWS)
+## Footprint, projection and costs at the customer (AWS)
 
-### Quanto os dados ocupam (medido)
+### How much the data occupies (measured)
 
-| Onde | Tamanho | Nota |
+| Where | Size | Note |
 |---|---:|---|
-| **Lake — raw (Parquet/S3)** | **171 MB** | os 3,15M registros comprimidos |
-| Lake — clean | 174 MB | tabelas materializadas |
-| **Grafo — FalkorDB (RAM)** | **302 MB** | 290k nós + 300k arestas, in-memory (~510 B/elem) |
-| Grafo — snapshot em disco (RDB) | 84 MB | persistência comprimida |
-| *(comparação)* Postgres de origem | 306 MB | os mesmos 2,1M users, OLTP |
-| *(comparação)* Mongo de origem | 170 MB | os mesmos 1,05M contratos |
+| **Lake — raw (Parquet/S3)** | **171 MB** | the 3.15M records, compressed |
+| Lake — clean | 174 MB | materialized tables |
+| **Graph — FalkorDB (RAM)** | **302 MB** | 290k nodes + 300k edges, in-memory (~510 B/elem) |
+| Graph — disk snapshot (RDB) | 84 MB | compressed persistence |
+| *(comparison)* source Postgres | 306 MB | the same 2.1M users, OLTP |
+| *(comparison)* source Mongo | 170 MB | the same 1.05M contracts |
 
-Dois pontos que viram argumento comercial: **(a)** o Parquet aberto (171 MB) é **mais
-compacto que os bancos operacionais de origem** (306 + 170 MB) — o dado continua seu,
-consultável por qualquer engine, sem cópia proprietária; **(b)** ingestão e clean têm pico
-de RAM **constante** (272–394 MB) *independente do volume* — streaming, não carregam o
-dataset.
+Two points that become commercial arguments: **(a)** the open Parquet (171 MB) is **more
+compact than the source operational databases** (306 + 170 MB) — the data stays yours,
+queryable by any engine, with no proprietary copy; **(b)** ingestion and clean have a
+**constant** RAM peak (272–382 MB) *regardless of volume* — streaming, they never load
+the dataset.
 
-### O que isso aguenta num servidor de verdade
+### What this handles on a real server
 
-O benchmark rodou num notebook de 8 GB de propósito. Num servidor, cada estágio escala
-diferente — e o gargalo **não** é onde a maioria pensa.
+The benchmark ran on an 8 GB laptop on purpose. On a server, each stage scales
+differently — and the bottleneck is **not** where most people think.
 
-**Lake (Parquet em S3) — praticamente ilimitado, e custa centavos.** A ~56 bytes/linha
-comprimido (medido: 3M linhas → 171 MB), o storage dos *arquivos* é a parte mais barata da
-conta. Preço do S3 Standard por GB·mês: **US$ 0,023** em us-east-1 · **US$ 0,0405** em
-São Paulo (sa-east-1):
+**Lake (Parquet on S3) — practically unlimited, and it costs cents.** At ~56
+bytes/row compressed (measured: 3M rows → 171 MB), the *file* storage is the cheapest
+part of the bill. S3 Standard price per GB·month: **$0.023** in us-east-1 · **$0.0405**
+in São Paulo (sa-east-1):
 
-| Linhas | Parquet no lake | S3 us-east-1 | S3 São Paulo |
+| Rows | Parquet in the lake | S3 us-east-1 | S3 São Paulo |
 |---:|---:|---:|---:|
-| 100 milhões | ~5,6 GB | ~US$ 0,13/mês | ~US$ 0,23/mês |
-| 1 bilhão | ~56 GB | ~US$ 1,30/mês | ~US$ 2,27/mês |
-| 10 bilhões | ~560 GB | ~US$ 13/mês | ~US$ 23/mês |
+| 100 million | ~5.6 GB | ~$0.13/mo | ~$0.23/mo |
+| 1 billion | ~56 GB | ~$1.30/mo | ~$2.27/mo |
+| 10 billion | ~560 GB | ~$13/mo | ~$23/mo |
 
-O catálogo DuckLake não adiciona custo próprio: são ~30 tabelas de metadados no **mesmo
-Postgres** que a plataforma já roda. Requests S3 (PUT/GET) são desprezíveis neste padrão de
-acesso — a ingestão escreve arquivos de micro-batch (poucos milhares de PUTs por sync, a
-US$ 0,005/1k) e as leituras são scans colunares, não milhões de GETs pequenos.
+The DuckLake catalog adds no cost of its own: it is ~30 metadata tables in the **same
+Postgres** the platform already runs. S3 requests (PUT/GET) are negligible under this
+access pattern — ingestion writes micro-batch files (a few thousand PUTs per sync, at
+$0.005/1k) and reads are columnar scans, not millions of small GETs.
 
-**Ingestão — linear no tempo, RAM constante** (~48,5k linhas/s, ~272 MB fixos → nunca dá
-OOM): 100M linhas ≈ **~34 min**, 1B linhas ≈ **~5,7 h**. Com mais cores / conectores em
-paralelo / S3 mais rápido, encurta.
+**Ingestion — linear in time, constant RAM** (~48.5k rows/s, ~272 MB fixed → never
+OOMs): 100M rows ≈ **~34 min**, 1B rows ≈ **~5.7 h**. With more cores / parallel
+connectors / faster S3, it shortens.
 
-**Clean (dbt/DuckDB)** paraleliza por core e derrama pra disco — 100M linhas em ~poucos
-minutos num servidor comum.
+**Clean (dbt/DuckDB)** parallelizes per core and spills to disk — 100M rows in ~a few
+minutes on an ordinary server.
 
-**Incremental — o segredo do custo baixo.** O sync do dia-a-dia custa o **tamanho da
-mudança**, não o da base. Um cliente com 1 bilhão de linhas mas 5 milhões mudando por dia
-paga ~5M/dia (~2 min) — **não** 1 bilhão. Em regime permanente, a conta é sempre do delta.
+**Incremental — the secret of the low cost.** The day-to-day sync costs the **size of
+the change**, not of the base. A customer with 1 billion rows but 5 million changing per
+day pays for ~5M/day (~2 min) — **not** 1 billion. In steady state, the bill always
+tracks the delta.
 
-**Grafo (FalkorDB) — limitado por RAM**, mas um servidor normal segura dezenas a centenas de
-milhões de entidades (a ~510 B/elemento medido, com ~40% de folga pra RAM de query):
+**Graph (FalkorDB) — RAM-bound**, but a normal server holds tens to hundreds of millions
+of entities (at the measured ~510 B/element, with ~40% headroom for query RAM):
 
-| RAM do servidor | Elementos no grafo | ≈ Entidades (nós) |
+| Server RAM | Elements in the graph | ≈ Entities (nodes) |
 |---:|---:|---:|
 | 16 GB | ~19M | ~9M |
 | 32 GB | ~38M | ~19M |
@@ -266,146 +345,144 @@ milhões de entidades (a ~510 B/elemento medido, com ~40% de folga pra RAM de qu
 | 128 GB | ~150M | ~75M |
 | 256 GB | ~300M | ~150M |
 
-O FalkorDB oficialmente vai a **bilhões de arestas** com hardware adequado, queries em
-milissegundos (GraphBLAS). O limite prático da **carga inicial** é a velocidade de escrita —
-hoje ~4.680 elem/s (com UNWIND); pra grafos grandes, o `falkordb-bulk-loader` faz
-milhões/s. Depois disso, o worker mantém o grafo **por delta** (barato).
+FalkorDB officially scales to **billions of edges** on adequate hardware, with
+millisecond queries (GraphBLAS). The practical limit of the **initial load** is write
+speed — today ~4,690 elem/s (with UNWIND); for large graphs, `falkordb-bulk-loader`
+does millions/s. After that, the worker maintains the graph **by delta** (cheap).
 
-### Quanto custa deixar o grafo em RAM (AWS)
+### What it costs to keep the graph in RAM (AWS)
 
-RAM é o único recurso que o grafo consome de verdade — e na AWS ela é comprada junto com a
-instância. Para grafos que ainda cabem na VM da plataforma, o custo extra é **zero**: na VM
-starter de 16 GB, o FalkorDB fica com uma fatia de ~4 GB (teto de cgroup do compose) →
-**até ~4–5M elementos sem nenhum custo adicional**. Acima disso, o grafo vai pra um **nó
-dedicado memory-optimized** (família `r8g`, Graviton4 — 8 GB de RAM por vCPU, o melhor
-US$/GB da AWS). Preços on-demand Linux (jul/2026):
+RAM is the only resource the graph truly consumes — and on AWS you buy it with the
+instance. For graphs that still fit in the platform VM, the extra cost is **zero**: on
+the 16 GB starter VM, FalkorDB gets a ~4 GB slice (the compose cgroup ceiling) →
+**up to ~4–5M elements at no additional cost**. Beyond that, the graph moves to a
+**dedicated memory-optimized node** (`r8g` family, Graviton4 — 8 GB of RAM per vCPU, the
+best $/GB on AWS). On-demand Linux prices (Jul/2026):
 
-| Elementos no grafo | RAM (c/ folga de query) | Instância | us-east-1 | São Paulo |
+| Elements in the graph | RAM (with query headroom) | Instance | us-east-1 | São Paulo |
 |---:|---:|---|---:|---:|
-| até ~5M | fatia da VM starter | — (compartilhada) | US$ 0 extra | US$ 0 extra |
-| ~19M | 16 GB | `r8g.large` | ~US$ 86/mês | ~US$ 162/mês |
-| ~38M | 32 GB | `r8g.xlarge` | ~US$ 172/mês | ~US$ 324/mês |
-| ~75M | 64 GB | `r8g.2xlarge` | ~US$ 344/mês | ~US$ 647/mês |
-| ~150M | 128 GB | `r8g.4xlarge` | ~US$ 688/mês | ~US$ 1.294/mês |
+| up to ~5M | slice of the starter VM | — (shared) | $0 extra | $0 extra |
+| ~19M | 16 GB | `r8g.large` | ~$86/mo | ~$162/mo |
+| ~38M | 32 GB | `r8g.xlarge` | ~$172/mo | ~$324/mo |
+| ~75M | 64 GB | `r8g.2xlarge` | ~$344/mo | ~$647/mo |
+| ~150M | 128 GB | `r8g.4xlarge` | ~$688/mo | ~$1,294/mo |
 
-Ou seja: **RAM de grafo custa ~US$ 5,4/GB·mês em us-east-1 e ~US$ 10/GB·mês em São Paulo**
-(on-demand; um savings plan de 1 ano corta ~35%). A persistência do grafo (snapshot RDB +
-AOF) vai pro disco EBS e é irrelevante na conta — os 590k elementos deste benchmark geraram
-**84 MB** de snapshot (~US$ 0,01/mês em gp3). A regra operacional que já usamos no compose
-vale aqui também: o teto de RAM da instância deve ficar **acima** do `maxmemory` do FalkorDB,
-para o fork do BGSAVE/AOF-rewrite ter folga.
+In other words: **graph RAM costs ~$5.4/GB·month in us-east-1 and ~$10/GB·month in São
+Paulo** (on-demand; a 1-year savings plan cuts ~35%). Graph persistence (RDB snapshot +
+AOF) goes to the EBS disk and is irrelevant in the bill — this benchmark's 590k elements
+produced an **84 MB** snapshot (~$0.01/mo on gp3). The operational rule we already apply
+in compose holds here too: the instance's RAM ceiling must stay **above** FalkorDB's
+`maxmemory`, so the BGSAVE/AOF-rewrite fork has headroom.
 
-### A VM da plataforma (o resto da conta)
+### The platform VM (the rest of the bill)
 
-O restante da stack (ingestão, dbt, APIs, Prefect, Postgres, Qdrant) roda na VM starter —
-`t4g.xlarge` (4 vCPU / 16 GB, Graviton2, ADR-005): **~US$ 98/mês** em us-east-1 ·
-**~US$ 157/mês** em São Paulo, mais o disco EBS gp3 (US$ 0,08 · US$ 0,152 por GB·mês —
-100 GB ≈ US$ 8 · US$ 15). Ingestão e clean são **streaming com RAM constante** (§1–2),
-então a mesma VM serve de 3M a centenas de milhões de linhas — o tempo cresce, a máquina não.
+The rest of the stack (ingestion, dbt, APIs, Prefect, Postgres, Qdrant) runs on the
+starter VM — `t4g.xlarge` (4 vCPU / 16 GB, Graviton2, ADR-005): **~$98/mo** in
+us-east-1 · **~$157/mo** in São Paulo, plus the EBS gp3 disk ($0.08 · $0.152 per
+GB·month — 100 GB ≈ $8 · $15). Ingestion and clean are **streaming with constant RAM**
+(§1–2), so the same VM serves from 3M to hundreds of millions of rows — the time grows,
+the machine does not.
 
-**Exemplo — cliente médio** (2M clientes + 8M contratos + ~100k mudanças/dia), conta AWS
-completa em São Paulo:
+**Example — a typical customer** (2M customers + 8M contracts + ~100k changes/day),
+full AWS bill in São Paulo:
 
-- **Lake (arquivos):** ~600 MB de Parquet → **~US$ 0,03/mês** de S3.
-- **Ingestão inicial** ~3–4 min · **clean** ~1 min (na própria VM).
-- **Grafo:** ~10M nós + ~24M arestas ≈ 34M elementos → 48 GB c/ folga → nó dedicado
-  `r8g.2xlarge` (64 GB) → **~US$ 647/mês** (us-east-1: ~US$ 344); carga inicial via
-  bulk-loader em minutos.
-- **VM da plataforma:** `t4g.xlarge` + 100 GB gp3 → **~US$ 172/mês** (us-east-1: ~US$ 106).
-- **Sync diário:** ~100k linhas → **segundos** (o delta é a conta permanente, e é ínfima).
+- **Lake (files):** ~600 MB of Parquet → **~$0.03/mo** of S3.
+- **Initial ingestion** ~3–4 min · **clean** ~1 min (on the VM itself).
+- **Graph:** ~10M nodes + ~24M edges ≈ 34M elements → ~18 GB at the measured ~510
+  B/element → with query headroom it fits the **32 GB** tier (the capacity table above:
+  32 GB holds ~38M elements) → dedicated `r8g.xlarge` → **~$324/mo** (us-east-1: ~$172);
+  initial load via bulk-loader in minutes. Size one tier up (64 GB, ~$647) only if your
+  entities carry heavier properties than the benchmark's.
+- **Platform VM:** `t4g.xlarge` + 100 GB gp3 → **~$172/mo** (us-east-1: ~$106).
+- **Daily sync:** ~100k rows → **seconds** (the delta is the permanent bill, and it is
+  tiny).
 
-> **Total infra AWS: ~US$ 820/mês em São Paulo (~US$ 450 em us-east-1), on-demand** — e o
-> item dominante é a RAM do grafo, que só cresce se o *grafo* crescer. Sem warehouse
-> proprietário, sem cluster, tudo BYOC na conta do cliente.
+> **Total AWS infra: ~$500/mo in São Paulo (~$280 in us-east-1), on-demand** — and the
+> dominant item is graph RAM, which only grows if the *graph* grows. No proprietary
+> warehouse, no cluster, all BYOC in the customer's own account.
 
-Tudo num único servidor **BYOC** (na nuvem do próprio cliente), sem data warehouse
-proprietário. **O que escala pra bilhões (lake, ingestão, incremental) é barato; o que é
-limitado por RAM (grafo) sobe com o servidor — e o custo permanente é sempre o do delta.**
+Everything on a single **BYOC** server (in the customer's own cloud), with no
+proprietary data warehouse. **What scales to billions (lake, ingestion, incremental) is
+cheap; what is RAM-bound (the graph) grows with the server — and the permanent cost is
+always the delta's.**
 
-> **Fontes de preço (jul/2026, on-demand Linux):** tabela oficial AWS — `r8g.large`
-> sa-east-1 US$ 0,2216/h e `t4g.large` sa-east-1 US$ 0,1072/h (⇒ `t4g.xlarge` US$ 0,2144/h);
-> us-east-1: `t4g.xlarge` US$ 0,1344/h · `r8g.large` US$ 0,1178/h; EBS gp3 sa-east-1
-> US$ 0,152/GB·mês. Mensal = hora × 730. S3 Standard sa-east-1 US$ 0,0405/GB·mês (primeiros
-> 50 TB) — conferir na calculadora AWS ao fechar proposta; câmbio R$ não aplicado.
-
----
-
-## Antes → Depois (console Strattum)
-
-Toda a jornada é visível no console — sem SQL na mão.
-
-**Antes — catálogo vazio, memória vazia:**
-
-![Catálogo vazio](benchmark-assets/before-catalog.png)
-
-![Grafo de memória vazio](benchmark-assets/before-memory.png)
-
-**Depois — 3M linhas catalogadas + grafo materializado:**
-
-Catálogo: 3 tabelas `raw` + 5 `clean` = 8 no total (era 0), sem ninguém escrever SQL de ETL.
-
-![Catálogo populado](benchmark-assets/after-catalog.png)
-
-Camada *clean* com as contagens reais — `users` **2.100.000**, `contracts` **1.050.000**, `products` 500, mais as fatias do grafo:
-
-![Detalhe das tabelas clean](benchmark-assets/after-catalog_users.png)
-
-Grafo de entidades no Memory — o primeiro paint agora abre **conectado**: uma amostra semeada por
-arestas (~800 nós) traz os **contratos** (âmbar) ligando suas duas partes — os **usuários** (azul) —
-e o **produto** (verde). São os "digital twins" da §4, repetidos ~200×. O esquema do padrão:
-
-![Esquema do primeiro paint conectado](benchmark-assets/connected-graph.svg)
-
-E o mesmo **ao vivo no console** — repare no rodapé: `800 entidades · 627 conexões` (antes: 0 conexões):
-
-![Grafo de memória conectado no console Strattum](benchmark-assets/after-memory.png)
+> **Price sources (Jul/2026, on-demand Linux):** official AWS price table —
+> `r8g.large` sa-east-1 $0.2216/h and `t4g.large` sa-east-1 $0.1072/h (⇒ `t4g.xlarge`
+> $0.2144/h); us-east-1: `t4g.xlarge` $0.1344/h · `r8g.large` $0.1178/h; EBS gp3
+> sa-east-1 $0.152/GB·month. Monthly = hourly × 730. S3 Standard sa-east-1
+> $0.0405/GB·month (first 50 TB) — double-check in the AWS calculator when closing a
+> proposal; no BRL conversion applied.
 
 ---
 
-## Como funciona (4 passos)
+## Before → After (Strattum console)
 
-![Como o dado entra, vira grafo e é servido](assets/arquitetura-lake.svg)
+The whole journey is visible in the console — no hand-written SQL.
 
-1. **Conecte** a fonte no console (PostgreSQL, MongoDB, …). As credenciais ficam no
-   registro de conectores; a seleção de tabelas/coleções e o modo de sync
-   (full/incremental, cursor, PK) ficam no estado do conector.
-2. **Ingira** para o `raw` do lake — Parquet em S3/MinIO, catalogado pelo **DuckLake**.
-   Streaming ponta a ponta: memória constante, incremental por cursor.
-3. **Modele** com **dbt** rodando DuckDB nativo sobre o lake: normalização, `JOIN`s,
-   tipagem → camada `clean`, materializada de volta no próprio lake.
-4. **Construa o grafo**: a ontologia mapeia `clean` → nós e arestas; o worker resolve
-   entidades e materializa no FalkorDB. O resultado aparece no Memory do console.
+**Before — empty catalog, empty memory:**
 
-Tudo sobre **formatos abertos** (Parquet + catálogo relacional). Sem lock-in de warehouse,
-sem cópia proprietária dos dados.
+![Empty catalog](benchmark-assets/before-catalog.png)
+
+![Empty memory graph](benchmark-assets/before-memory.png)
+
+**After — 3M rows cataloged + graph materialized:**
+
+Catalog: 3 `raw` tables + 5 `clean` = 8 total (was 0), with nobody writing ETL SQL.
+
+![Populated catalog](benchmark-assets/after-catalog.png)
+
+*Clean* layer with the real counts — `users` **2,100,000**, `contracts` **1,050,000**,
+`products` 500, plus the graph slices:
+
+![Clean tables detail](benchmark-assets/after-catalog_users.png)
+
+Entity graph in Memory — the first paint now opens **connected**: an edge-seeded sample
+(~800 nodes) brings the **contracts** (amber) linking their two parties — the **users**
+(blue) — and the **product** (green). They are §4's "digital twins", repeated ~200×. The
+pattern's schema:
+
+![Connected first-paint schema](benchmark-assets/connected-graph.svg)
+
+And the same **live in the console** — note the footer: `800 entities · 627 connections`
+(before: 0 connections):
+
+![Connected memory graph in the Strattum console](benchmark-assets/after-memory.png)
 
 ---
 
-## Por que isso importa
+## Why this matters
 
-- **Qualquer empresa consegue.** Se roda num notebook de 8 GB com 3M de linhas em ~1 minuto,
-  roda no seu ambiente com os seus dados.
-- **Barato em regime permanente.** O sync diário custa o **tamanho do delta**, não o da base.
-- **Aberto por construção.** Parquet + DuckLake: os dados continuam seus, consultáveis por
-  qualquer engine, sem reimportar.
-- **Do dado bruto ao conhecimento.** Não para no "data lake": entrega camada modelada +
-  grafo de entidades pronto para IA/contexto.
+- **Any company can do it.** If it runs on an 8 GB laptop with 3M rows in ~1 minute, it
+  runs in your environment with your data.
+- **Cheap in steady state.** The daily sync costs the **size of the delta**, not of the
+  base.
+- **Open by construction.** Parquet + DuckLake: the data stays yours, queryable by any
+  engine, with no re-import.
+- **From raw data to knowledge.** It does not stop at the "data lake": it delivers a
+  modeled layer + an entity graph ready for AI/context.
 
 ---
 
-## Metodologia & reprodutibilidade
+## Methodology & reproducibility
 
-- **Medição:** cada estágio rodou como processo isolado sob `/usr/bin/time -l` (tempo de
-  parede + *maximum resident set size*). Throughput = linhas ÷ tempo do estágio.
-- **Dados:** sintéticos e determinísticos (geradores versionados). `updated_at` do
-  incremento estritamente maior que o watermark do bootstrap, para exercitar o delta real.
-- **Código de produção:** a ingestão usa os conectores/flows reais da plataforma
-  (`sync_resource_to_raw`), não um caminho de benchmark à parte. O `clean` usa os mesmos
-  modelos dbt. O grafo usa o mesmo `MemoryWorkerPipeline`.
-- **Honestidade de escopo:** ingestão e clean no volume cheio (2M/1M); grafo em fatia
-  representativa com projeção, pela restrição de RAM do notebook (ver §4).
-- **O benchmark virou QA:** de brinde, ele expôs (e este relatório corrigiu) o gargalo de
-  escrita do grafo — 1 `MERGE`/linha → `UNWIND` batch, **2,87× mais rápido** — e o cap de
-  first-paint do viz que estourava em grafos grandes.
+- **Measurement:** each stage ran as an isolated process under `/usr/bin/time -l` (wall
+  time + *maximum resident set size*). Throughput = rows ÷ stage time.
+- **Data:** synthetic and deterministic (versioned generators). The increment's
+  `updated_at` is strictly greater than the bootstrap watermark, to exercise a real
+  delta.
+- **Limitation — the data is clean by construction:** every reference resolves, e-mails
+  are well-formed, types are consistent. Real operational bases are not. A follow-up
+  benchmark will inject **dirty data** — broken references, duplicate people with
+  diverging spellings, malformed e-mails/dates, nulls — to measure what the clean
+  layer's normalization (LOWER/TRIM, typing, dedup by PK) and the graph's entity
+  resolution do with it, and how the errors surface to the operator.
+- **Production code:** ingestion uses the platform's real connectors/flows
+  (`sync_resource_to_raw`), not a separate benchmark path. The `clean` uses the same dbt
+  models. The graph uses the same `MemoryWorkerPipeline`.
+- **Scope honesty:** ingestion and clean at full volume (2M/1M); graph on a
+  representative slice with projection, due to the laptop's RAM limit (see §4).
+- **The benchmark doubled as QA:** as a bonus, it exposed (and this report fixed) the
+  graph write bottleneck — 1 `MERGE`/row → batched `UNWIND`, **2.87× faster** — and the
+  viz first-paint cap that blew up on large graphs.
 
-_Benchmark executado em 2026-07-19; grafo otimizado (UNWIND) no mesmo dia._
+_Benchmark executed on 2026-07-19; graph optimized (UNWIND) the same day._
