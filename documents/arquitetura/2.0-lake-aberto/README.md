@@ -60,8 +60,8 @@ flowchart LR
 ```
 
 > Storage = **DuckLake** (catálogo Postgres, dados em object storage). Federation =
-> **DuckDB + ADBC**. Diagrama polido: [assets/arquitetura-lake.svg](../../../assets/arquitetura-lake.svg)
-> (🇬🇧 [en](../../../assets/arquitetura-lake.en.svg)).
+> **DuckDB + ADBC**. Diagrama polido (em inglês):
+> [assets/arquitetura-lake.svg](../../../assets/arquitetura-lake.svg).
 
 ---
 
