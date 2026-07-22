@@ -15,6 +15,14 @@ iniciativa. Legenda: 🛑 aberto · 🔗 vive noutro doc.
 
 ## Mapa das perguntas em aberto
 
+> ✅ **Resolvidos pelo benchmark 2026-07-19** ([BENCHMARK-LAKEHOUSE](../../../BENCHMARK-LAKEHOUSE.md), 2M pg + 1M mongo):
+> **performance do grafo** (§1 — `execute_batch` 1-MERGE/linha → `UNWIND`, **2,87×**),
+> **footprint do FalkorDB** (§3 — ~510 B/elemento), **DuckLake sob volume** (2M em 37s / 1M em
+> 25s, streaming, 272 MB constante), **clean dbt/DuckLake** (3M em 3,8s), **incremental
+> merge-por-PK** (0 duplicatas). Seguem **abertos**: concorrência multi-conector no mesmo
+> model, dedup *graph-side* (fallback `uuid4`, [tarefa 01 §C](tarefas/01-lakehouse/)),
+> isolamento do container do grafo (§3.1), deep-dive por conector (§2), federation→grafo (§4).
+
 | Pergunta | Onde vive |
 |---|---|
 | **Maturidade do DuckLake (1.0)** + catálogo Postgres sob concorrência | 🔗 [tarefas/01-lakehouse](tarefas/01-lakehouse/) |
@@ -30,16 +38,24 @@ iniciativa. Legenda: 🛑 aberto · 🔗 vive noutro doc.
 
 ---
 
-## §1 · Performance do grafo 🛑
+## §1 · Performance do grafo ✅ (medido — benchmark 2026-07-19)
 
-Ainda **a medir**. O caminho CLEAN→grafo já é em batch (flush a cada 200 statements via
-`execute_batch`), mas nunca medimos throughput/latência de carga sob volume real. A investigar:
+**Medido** no [BENCHMARK-LAKEHOUSE](../../../BENCHMARK-LAKEHOUSE.md) (grafo de **290.756 nós +
+300.000 arestas** sobre clean real, fatia de 100k contratos):
 
-- Throughput de `MERGE` no FalkorDB (nós + arestas) por segundo, com/sem índices em
-  `entity_id` e nos `match_field` das arestas.
-- Onde satura: driver `falkordb` (protocolo Redis), tamanho do batch, ER em Python.
-- Custo de re-`MERGE` idempotente vs `CREATE` na primeira carga.
-- Comparar motores de grafo **fica fora de escopo por ora** — FalkorDB é a decisão atual.
+- **Throughput + onde satura:** o `execute_batch` era um **loop** — 1 `MERGE`/statement, 1
+  round-trip ao FalkorDB por nó e por aresta (o "flush a cada 200" agrupava logicamente mas
+  **não** reduzia as idas), a **~1.630 elem/s**. Reescrevemos pra agrupar cada lote num
+  **`UNWIND $rows AS row ...`** (1 round-trip por lote de ~500) → **362s → 126s (2,87×)**,
+  ~4.680 elem/s. Índices em `entity_id`/`match_field` já são criados antes do loop → `MERGE`
+  é O(log n). Local, o round-trip é barato, então o custo dominante virou o `MERGE` no
+  FalkorDB + a leitura do lake; num FalkorDB **remoto** o `UNWIND` rende muito mais. Teto da
+  carga inicial em escala: `falkordb-bulk-loader` (CSV → grafo, milhões/s).
+- **Re-`MERGE` idempotente:** confirmado — rebuilds re-MERGE sem duplicar (`entity_id`
+  determinístico).
+- **Cobertura:** `memory-worker/tests/test_falkordb_batch.py` (5 testes do UNWIND) +
+  `test_falkordb_params.py` (9). Comparar **motores de grafo** segue fora de escopo (FalkorDB
+  é a decisão).
 
 ## §2 · Deep-dive por conector 🛑
 
@@ -68,9 +84,12 @@ limit/paginação. Alimenta [tarefas/01](tarefas/01-lakehouse/) (colunas certas)
 1. **Isolar a materialização do grafo** num worker pool / container dedicado, separado dos
    pipelines de dados — pra que uma ingestão pesada não dispute CPU/RAM com a carga do grafo
    (e vice-versa), e pra escalar os dois independentemente.
-2. **FalkorDB dedicado por tenant / com mais recurso** — o limite de 512 MB é starter; medir
-   footprint sob volume real, política de persistência, e se multi-tenant exige uma instância
-   por cliente ou grafos separados na mesma instância.
+2. **FalkorDB dedicado por tenant / com mais recurso** — o limite de 512 MB é starter.
+   ✅ **Footprint medido** ([benchmark](../../../BENCHMARK-LAKEHOUSE.md)): **~510 bytes/elemento**
+   (290k nós + 300k arestas = 302 MB de RAM used / 84 MB de RDB) → o cap starter de 512 MB
+   segura ~1M elementos; a projeção por RAM está no benchmark (16 GB ≈ ~19M, 64 GB ≈ ~75M,
+   256 GB ≈ ~300M elementos). Segue aberto: **política de persistência** e se **multi-tenant**
+   exige instância por cliente ou grafos separados na mesma instância.
 3. **Leitura do lake pela rede** — com o lake aberto (2.0), o worker do grafo lê a CLEAN do
    object storage (`s3://`) em vez do arquivo local; validar latência/custo desse read
    remoto a partir de um container isolado (conecta com [tarefas/03](tarefas/03-federation/)).

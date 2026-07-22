@@ -49,6 +49,8 @@ O pipeline ganhou um estágio **`RAW → enrichment (LLM) → CLEAN`**
 clean. **Implicação:** o lake tem **três camadas** — `raw`, `enrichment`, `clean` — todas no
 DuckLake. A classe de acesso ao lake (abaixo) precisa tratar as três de forma uniforme.
 
+- 💡 **Sugestão a avaliar:** rodar o enrichment em **SQL/dbt** com a extensão [`duckdb-ai`](https://github.com/leonardovida/duckdb-ai) (`INSTALL ai FROM community`) — `ai_extract_record`/`ai_complete_json` etc., com batch/cache/custo e providers Anthropic/OpenAI/Ollama/LiteLLM. `RAW → enrichment` viraria um model dbt (uma engine só). 🛑 Verificar paridade com o `ai_enrichment` atual (cache por versão, retry, budget) + maturidade. Clone: `~/Repos/duckdb-ai`. Detalhe em [descobertas §6](../../descobertas.md).
+
 ---
 
 ## Tarefas
